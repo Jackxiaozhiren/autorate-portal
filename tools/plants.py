@@ -107,9 +107,13 @@ PLANTS: tuple[Plant, ...] = (
           "    if key in packets:",
           "    if False and key in packets:",
           "tests/test_packet.py::test_ac14_reingest_yields_one_row_and_no_duplicate_artefacts"),
-    Plant("html-triple-completeness", "html.py",
-          '    if missing:\n        return False, "", ", ".join(sorted(missing))',
-          '    if False and missing:\n        return False, "", ", ".join(sorted(missing))',
+    Plant("emit-triple-completeness", "emit.py",
+          "    missing = missing_components(values)\n"
+          "    if missing:\n"
+          "        raise EmitRefused(missing)",
+          "    missing = missing_components(values)\n"
+          "    if False and missing:\n"
+          "        raise EmitRefused(missing)",
           "tests/test_html.py::test_missing_bound_unit_renders_unavailable_not_a_number"),
     Plant("html-refusal-not-zero", "html.py",
           '        state = "NOT_CERTIFIABLE" if reason else "NOT_INFORMATIVE"',
@@ -141,6 +145,52 @@ PLANTS: tuple[Plant, ...] = (
           "    if not rederived:",
           "    if False and not rederived:",
           "tests/test_replay.py::test_replay_without_a_rederived_line_is_refused"),
+    # --- M2: the replay engine, its registry, doctor, and the run row ---
+    Plant("ac4-mismatch-not-certified", "engine.py",
+          "    if outcome.disagrees:\n        return \"mismatch\"",
+          "    if False and outcome.disagrees:\n        return \"mismatch\"",
+          "tests/test_engine.py::test_ac4_a_mismatch_names_both_digests_and_is_never_certified"),
+    Plant("ac4-mismatch-reason-drops-digests", "engine.py",
+          '        reason = ("stored denominator %s disagrees with the replay\'s %s; "\n'
+          '                  "stored digest %s, replay digest %s"\n'
+          "                  % (manifest.expected_rederived, outcome.rederived,\n"
+          "                     manifest.manifest_sha256, outcome.stdout_sha256))",
+          '        reason = ("stored denominator %s disagrees with the replay\'s %s"\n'
+          "                  % (manifest.expected_rederived, outcome.rederived))",
+          "tests/test_engine.py::test_ac4_a_mismatch_names_both_digests_and_is_never_certified"),
+    Plant("i5-run-row-drops-argv", "engine.py",
+          "argv=list(argv), command=list(command),",
+          "argv=[], command=list(command),",
+          "tests/test_engine.py::"
+          "test_i5_a_certified_run_row_carries_the_pinned_invocation_and_exit_code"),
+    Plant("i5-run-row-drops-command", "engine.py",
+          "argv=list(argv), command=list(command),",
+          "argv=list(argv), command=[],",
+          "tests/test_engine.py::"
+          "test_i5_a_certified_run_row_carries_the_pinned_invocation_and_exit_code"),
+    Plant("pin-unregistered-accepted", "distributions.py",
+          "    if pin is None:\n        return None, [Refusal(",
+          "    if pin is None:\n"
+          "        pin = Pin(name=name, version=version, wheel=wheel, sha256=sha256, source=\"\")\n"
+          "    if False:\n        return None, [Refusal(",
+          "tests/test_distributions.py::test_an_unregistered_version_is_refused_and_names_what_is_registered"),
+    Plant("pin-sha-mismatch-accepted", "distributions.py",
+          "    if pin.sha256 != sha256:",
+          "    if False and pin.sha256 != sha256:",
+          "tests/test_distributions.py::test_a_sha256_disagreement_names_both_sides"),
+    Plant("pin-wheel-mismatch-accepted", "distributions.py",
+          "    if pin.wheel != wheel:",
+          "    if False and pin.wheel != wheel:",
+          "tests/test_distributions.py::test_a_wheel_filename_disagreement_names_both_sides"),
+    Plant("doctor-docker-false-ok", "doctor.py",
+          '    return Check("docker", "ok" if env.docker_available else "fail", env.docker_detail)',
+          '    return Check("docker", "ok", env.docker_detail)',
+          "tests/test_doctor.py::test_missing_docker_fails_the_container_backend_and_exits_not_run"),
+    Plant("engine-second-executor", "engine.py",
+          "import json\nfrom dataclasses import dataclass, field",
+          "import json\nimport subprocess  # a second executor must be caught by the static rule\n"
+          "from dataclasses import dataclass, field",
+          "tests/test_only_engine_executes.py::test_only_one_module_can_spawn_a_process"),
 )
 
 

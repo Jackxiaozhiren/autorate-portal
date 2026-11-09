@@ -124,6 +124,61 @@ jobs:
           echo "SHAREABLE_REPLAY_RC=$RC"
           test "$RC" -eq 3
 
+      - name: M2 doctor before a replay is spent
+        run: |
+          set -euo pipefail
+          uv run --frozen autorate-portal doctor --backend container --packet packets/frozen-full.packet.tar
+
+      - name: M2 AC4 - a stored denominator that disagrees is a mismatch, not a pass
+        run: |
+          set -euo pipefail
+          uv run --frozen autorate-portal packet build --out packets/ac4-wrong-denominator.tar \
+            --source "$RUNNER_TEMP/frozen" --revision "$REV" --version 0.1.2 \
+            --wheel autorate-0.1.2-py3-none-any.whl \
+            --wheel-sha256 7709d3faa560417efcbd8066f6db79d741d995bbbb9b23d2d595ed2a6fb38205 \
+            --expected-rederived "611 /612"
+          set +e
+          uv run --frozen autorate-portal run packets/ac4-wrong-denominator.tar \
+            --backend container --runs packets/runs.jsonl
+          RC=$?
+          set -e
+          echo "AC4_MISMATCH_RC=$RC"
+          test "$RC" -eq 4
+          uv run --frozen autorate-portal runs list --runs packets/runs.jsonl
+          uv run --frozen python - <<'PY'
+          import json
+          rows = [json.loads(line) for line in open('packets/runs.jsonl') if line.strip()]
+          row = rows[-1]
+          assert row['state'] == 'mismatch', row
+          assert row['digest_stored'] and row['digest_replayed']
+          assert row['digest_stored'] != row['digest_replayed']
+          assert row['digest_stored'] in row['reason'] and row['digest_replayed'] in row['reason']
+          assert row['denominator_stored'] == '611 /612'
+          assert row['denominator_replayed'] == '612 /612'
+          assert row['command'] == ['verify', '--protocol', 'protocol.json']
+          assert row['argv'] and row['argv'][0] == 'docker'
+          assert row['exit_code'] == 0
+          print('AC4 mismatch row: both digests named, pinned invocation and exit code recorded')
+          PY
+
+      - name: M2 AC9 through the engine - run rows are what a stranger reads
+        run: |
+          set -euo pipefail
+          uv run --frozen autorate-portal run packets/frozen-full.packet.tar \
+            --backend container --runs packets/runs.jsonl
+          uv run --frozen autorate-portal run packets/frozen-full.packet.tar \
+            --backend container --runs packets/runs.jsonl
+          uv run --frozen python - <<'PY'
+          import json
+          rows = [json.loads(line) for line in open('packets/runs.jsonl') if line.strip()]
+          certified = [r for r in rows if r['state'] == 'certified']
+          assert len(certified) == 1, 'the same observation twice must be one row: %s' % rows
+          row = certified[0]
+          assert row['denominator_replayed'] == '612 /612'
+          assert row['state'] != 'mismatch'
+          print('run store: 1 certified row, idempotent on the observation')
+          PY
+
       - name: I6 plant - swapped wheel hash must go red, then restore
         run: |
           set -euo pipefail

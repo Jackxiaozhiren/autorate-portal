@@ -5,8 +5,10 @@ Evidence packets for [autorate](https://github.com/Jackxiaozhiren/autorate). The
 their bytes, renders them, and replays them with a pinned distribution so a stranger can
 re-derive the same denominator without access to the producing organisation.
 
-This repository is **M1** of the Autorate Portal plan. M2–M5 (web features, auth, replay job
-runner, HTTP API) are deliberately not implemented here.
+This repository is **M2** of the Autorate Portal plan: M1's packet contract plus the replay
+engine — a job runner whose run rows carry argv, exit code and stdout hash; a pinned-distribution
+registry that can contradict a forged packet; and `doctor`. M3–M5 (auth, database, HTTP API,
+policies, in-browser verifier) are deliberately not implemented here.
 
 ## Install
 
@@ -26,6 +28,9 @@ Requires Python >= 3.10 and `pydantic>=2.6,<3`. Nothing else is needed for build
 | `autorate-portal packet verify <packet.tar> [--registry registry.json]` | AC1 integrity check; optional idempotent index (AC14) |
 | `autorate-portal packet html <packet.tar> -o view.html` | Self-contained HTML view, no records rows, no script |
 | `autorate-portal verify-packet <packet.tar> [--backend container\|uv]` | AC9/AC10 replay of the pinned wheel |
+| `autorate-portal doctor [--backend ...] [--packet P]` | What this machine can be asked to do, before a replay is spent |
+| `autorate-portal run <packet.tar> [--backend ...] [--runs runs.jsonl]` | One replay job, recorded as a run row (AC4, I5) |
+| `autorate-portal runs list\|show --runs runs.jsonl` | Read the recorded rows back |
 
 Build flags: `--version`, `--wheel`, `--wheel-sha256`, `--expected-rederived`, `--shareable`.
 The defaults pin `autorate==0.1.2`, wheel `autorate-0.1.2-py3-none-any.whl`, sha256
@@ -38,11 +43,26 @@ The defaults pin `autorate==0.1.2`, wheel `autorate-0.1.2-py3-none-any.whl`, sha
 | 0 | `certified` / ok | Integrity verified, or replay reproduced the stored denominator |
 | 2 | usage | Command-line or environment error |
 | 3 | `not-run` | Replay prerequisites absent. **Never** a pass |
-| 4 | `refused` / drift | Tampered bytes, a broken manifest, a pinned-wheel mismatch, or a failed replay. Nothing is indexed |
+| 4 | `refused` / `mismatch` | Tampered bytes, a broken manifest, a pin the registry rejects, a failed replay, or a replay that disagrees with the stored summary. Nothing is certified |
 
 A refusal prints the artefact path, the reason, and both the expected and actual sha256. An
 AC10 `not-run` names which prerequisite was missing and still carries a `run` row whose `state`
 is not `certified`.
+
+### Pinned distributions
+
+`src/autorate_portal/pins.json` is the registry: every distribution this portal has agreed to
+replay, with its wheel filename and sha256. A packet pinning a version that is not registered, or
+a wheel or hash that disagrees with the registry, is refused **before** anything is fetched from
+PyPI — a reachable index must not be able to vouch for a forged manifest. Widening the registry is
+a reviewed change, not a fallback to "latest".
+
+### Mismatch is not a pass
+
+`run` compares the replay's `re-derived N /M values` line with the packet's stored denominator, and
+the replay's stdout hash with the manifest's hash. When they disagree the row's `state` is
+`mismatch`, its reason names **both** digests, and the exit code is 4 — the code Section 3.3
+already gives drift. A view renders that as a mismatch, not as a number.
 
 ## Manifest contract
 

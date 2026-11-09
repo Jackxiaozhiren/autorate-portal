@@ -1,0 +1,245 @@
+"""The replay engine: the only place in this package that executes anything.
+
+Section 7's M2 row gives the engine four jobs - run, capture argv / exit code /
+stdout hash, keep a pinned-distribution registry, and degrade to ``not-run``
+when it cannot run - and one prohibition: *no endpoint computes a bound*. This
+module therefore stores numbers the replay printed and hashes; it never derives
+one, never averages two, and never fills a missing value.
+
+Section 4.3's run row is the unit of record. A row is written once and is
+idempotent on ``run_id``, the AC14 pattern applied to runs: re-running the same
+packet with the same backend produces the same id and does not append a second
+row.
+
+States (Section 5.11, AC4):
+
+``certified``  replay ran and reproduced the packet's stored denominator
+``mismatch``   replay ran and disagreed; both digests are named on the row
+``refused``    integrity, pin or replay failure - never a pass
+``not-run``    prerequisites absent; ``argv`` is empty and ``exit_code`` null
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from . import EXIT_NOT_RUN, EXIT_OK, EXIT_REFUSED
+from .distributions import load_registry, resolve
+from .manifest import sha256_bytes
+from .packet import Refusal, verify_bundle
+from .replay import Environment, probe_environment, verify_packet
+
+STATES = ("certified", "mismatch", "refused", "not-run")
+STATE_RC = {"certified": EXIT_OK, "mismatch": EXIT_REFUSED, "refused": EXIT_REFUSED,
+            "not-run": EXIT_NOT_RUN}
+RUN_ID_FIELDS = ("packet_id", "backend", "image", "command", "distribution", "state",
+                 "reason", "stdout_sha256")
+
+
+@dataclass(frozen=True)
+class RunRow:
+    """One replay attempt, in the shape Section 4.3 asks for."""
+
+    run_id: str
+    packet_id: str
+    backend: str
+    image: str
+    distribution: str
+    wheel_sha256: str
+    argv: list[str]
+    command: list[str]
+    exit_code: int | None
+    stdout_sha256: str
+    state: str
+    rc: int
+    reason: str
+    digest_stored: str
+    digest_replayed: str
+    denominator_stored: str
+    denominator_replayed: str
+    refusals: list[Refusal] = field(default_factory=list)
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "packet_id": self.packet_id,
+            "backend": self.backend,
+            "image": self.image,
+            "distribution": self.distribution,
+            "wheel_sha256": self.wheel_sha256,
+            "argv": list(self.argv),
+            "command": list(self.command),
+            "exit_code": self.exit_code,
+            "stdout_sha256": self.stdout_sha256,
+            "state": self.state,
+            "rc": self.rc,
+            "reason": self.reason,
+            "digest_stored": self.digest_stored,
+            "digest_replayed": self.digest_replayed,
+            "denominator_stored": self.denominator_stored,
+            "denominator_replayed": self.denominator_replayed,
+            "refusals": [{"path": r.path, "reason": r.reason,
+                          "expected": r.expected, "actual": r.actual} for r in self.refusals],
+        }
+
+
+def describe(refusals: list[Refusal]) -> str:
+    return "; ".join("%s: %s" % (r.path, r.reason) for r in refusals)
+
+
+def run_id_for(observation: dict[str, Any]) -> str:
+    """Identity of a run is what was asked *and* what happened.
+
+    Two attempts that produced different observations - a refusal then a
+    certificate, or two different reasons for ``not-run`` - are two rows. The
+    same observation twice is one row, which is AC14's idempotence applied to
+    runs rather than to packets.
+
+    The outer ``argv`` is deliberately *not* part of the identity: it carries a
+    per-attempt temporary path (and, for the container backend, the mount
+    points), so keying on it would make every re-run a new row and idempotence
+    vacuous. The pinned invocation (``command``) and the image are in the
+    identity instead, which is what actually distinguishes one replay from
+    another. ``argv`` is still written on the row, as evidence.
+    """
+    payload = {key: observation.get(key) for key in RUN_ID_FIELDS}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256_bytes(encoded)
+
+
+def classify(outcome) -> str:
+    """Map a replay outcome onto a run state.
+
+    ``disagrees`` is checked first: a replay that ran and disagreed with the
+    stored summary is AC4's mismatch, not a generic refusal. The replay module
+    keeps its own M1 state unchanged; the naming happens here.
+    """
+    if outcome.disagrees:
+        return "mismatch"
+    if outcome.state in ("certified", "not-run"):
+        return outcome.state
+    return "refused"
+
+
+def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
+         argv: list[str], command: list[str], exit_code: int | None, stdout_sha256: str,
+         state: str, reason: str, digest_stored: str, digest_replayed: str,
+         denominator_stored: str, denominator_replayed: str, image: str = "",
+         refusals: list[Refusal] | None = None) -> RunRow:
+    observation = {"packet_id": packet_id, "backend": backend, "image": image,
+                   "command": list(command), "distribution": distribution, "state": state,
+                   "reason": reason, "stdout_sha256": stdout_sha256}
+    return RunRow(
+        run_id=run_id_for(observation),
+        packet_id=packet_id, backend=backend, image=image, distribution=distribution,
+        wheel_sha256=wheel_sha256, argv=list(argv), command=list(command),
+        exit_code=exit_code, stdout_sha256=stdout_sha256, state=state,
+        rc=STATE_RC[state], reason=reason, digest_stored=digest_stored,
+        digest_replayed=digest_replayed, denominator_stored=denominator_stored,
+        denominator_replayed=denominator_replayed, refusals=list(refusals or []))
+
+
+def run(packet_path: Path, *, backend: str = "container", registry_path: Path | None = None,
+        env: Environment | None = None, store_path: Path | None = None) -> RunRow:
+    """Execute one replay job and, if a store is given, record it."""
+    packet = Path(packet_path)
+    verification = verify_bundle(packet)
+    if not verification.ok or verification.manifest is None:
+        row = _row(packet_id="", backend=backend, distribution="", wheel_sha256="",
+                   argv=[], command=[], exit_code=None, stdout_sha256="",
+                   state="refused",
+                   reason="packet integrity check failed; nothing was replayed",
+                   digest_stored="", digest_replayed="", denominator_stored="",
+                   denominator_replayed="", refusals=verification.refusals)
+        return _record(row, store_path)
+
+    manifest = verification.manifest
+    pinned = "%s==%s" % (manifest.distribution.name, manifest.distribution.version)
+
+    registry, problems = load_registry(registry_path)
+    if problems:
+        row = _row(packet_id=manifest.packet_id, backend=backend, distribution=pinned,
+                   wheel_sha256=manifest.distribution.sha256, argv=[], command=[],
+                   exit_code=None, stdout_sha256="", state="not-run",
+                   reason="pinned-distribution registry unusable: %s" % describe(problems),
+                   digest_stored=manifest.manifest_sha256, digest_replayed="",
+                   denominator_stored=manifest.expected_rederived, denominator_replayed="",
+                   refusals=problems)
+        return _record(row, store_path)
+
+    pin, problems = resolve(registry, version=manifest.distribution.version,
+                            wheel=manifest.distribution.wheel,
+                            sha256=manifest.distribution.sha256)
+    if problems:
+        row = _row(packet_id=manifest.packet_id, backend=backend, distribution=pinned,
+                   wheel_sha256=manifest.distribution.sha256, argv=[], command=[],
+                   exit_code=None, stdout_sha256="", state="refused",
+                   reason="packet pin rejected by the registry: %s" % describe(problems),
+                   digest_stored=manifest.manifest_sha256, digest_replayed="",
+                   denominator_stored=manifest.expected_rederived, denominator_replayed="",
+                   refusals=problems)
+        return _record(row, store_path)
+
+    environment = env or probe_environment()
+    outcome = verify_packet(packet, environment, backend=backend)
+    image = environment.image if backend == "container" else ""
+    state = classify(outcome)
+    reason = outcome.reason
+    if state == "mismatch":
+        reason = ("stored denominator %s disagrees with the replay's %s; "
+                  "stored digest %s, replay digest %s"
+                  % (manifest.expected_rederived, outcome.rederived,
+                     manifest.manifest_sha256, outcome.stdout_sha256))
+    row = _row(packet_id=manifest.packet_id, backend=backend, distribution=pin.specifier,
+               wheel_sha256=pin.sha256, argv=outcome.argv, command=outcome.command,
+               exit_code=outcome.exit_code, stdout_sha256=outcome.stdout_sha256,
+               state=state, reason=reason, digest_stored=manifest.manifest_sha256,
+               digest_replayed=outcome.stdout_sha256,
+               denominator_stored=manifest.expected_rederived,
+               denominator_replayed=outcome.rederived, image=image,
+               refusals=outcome.refusals)
+    return _record(row, store_path)
+
+
+def _record(row: RunRow, store_path: Path | None) -> RunRow:
+    if store_path is not None:
+        append_row(store_path, row)
+    return row
+
+
+def read_rows(store_path: Path) -> list[dict[str, Any]]:
+    target = Path(store_path)
+    if not target.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for number, line in enumerate(target.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            document = json.loads(line)
+        except ValueError as exc:
+            raise ValueError("%s line %d is not JSON: %s" % (target, number, exc)) from exc
+        if not isinstance(document, dict) or "run_id" not in document:
+            raise ValueError("%s line %d is not a run row" % (target, number))
+        rows.append(document)
+    return rows
+
+
+def append_row(store_path: Path, row: RunRow) -> bool:
+    """Append unless this run_id is already stored. Returns True when appended."""
+    target = Path(store_path)
+    if any(stored.get("run_id") == row.run_id for stored in read_rows(target)):
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row.as_json(), sort_keys=True) + "\n")
+    return True
+
+
+def find_row(store_path: Path, run_id: str) -> dict[str, Any] | None:
+    for stored in read_rows(store_path):
+        if stored.get("run_id") == run_id:
+            return stored
+    return None

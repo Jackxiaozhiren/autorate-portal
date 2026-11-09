@@ -25,7 +25,8 @@ from .packet import Refusal, Verification, read_bundle, verify_bundle
 
 REDERIVED_LINE = re.compile(r"re-derived\s+([0-9]+)\s*/([0-9]+)\s+values")
 PYPI_JSON = "https://pypi.org/pypi/autorate/json"
-REPLAY_PY = 'from autorate.cli import main\nraise SystemExit(main(["verify", "--protocol", "protocol.json"]))\n'
+INNER_COMMAND = ["verify", "--protocol", "protocol.json"]
+REPLAY_PY = "from autorate.cli import main\nraise SystemExit(main(%r))\n" % (INNER_COMMAND,)
 CONTAINER_SH = """#!/bin/sh
 set -e
 cp -a /packet /work
@@ -52,19 +53,28 @@ class ReplayOutcome:
     rc: int
     reason: str = ""
     argv: list[str] = field(default_factory=list)
+    command: list[str] = field(default_factory=list)
     exit_code: int | None = None
     stdout_sha256: str = ""
     digest_then: str = ""
     packet_id_in: str = ""
     rederived: str = ""
     expected: str = ""
+    disagrees: bool = False
     refusals: list[Refusal] = field(default_factory=list)
 
     def run_row(self) -> dict[str, Any]:
-        """PRD section 4.3 run-row shape; section 11 observability."""
-        return {"argv": self.argv, "exit_code": self.exit_code,
+        """PRD section 4.3 run-row shape; section 11 observability.
+
+        ``command`` is the argv handed to ``autorate``'s entry point - the same
+        object that generates the replay script, so it is captured rather than
+        reconstructed (I5). ``disagrees`` lets the engine name a mismatch
+        without widening this module's M1 refusal contract.
+        """
+        return {"argv": self.argv, "command": self.command, "exit_code": self.exit_code,
                 "stdout_sha256": self.stdout_sha256, "digest_then": self.digest_then,
-                "packet_id_in": self.packet_id_in, "state": self.state}
+                "packet_id_in": self.packet_id_in, "state": self.state,
+                "disagrees": self.disagrees}
 
 
 def probe_environment(image: str = "python:3.13-slim") -> Environment:
@@ -226,20 +236,20 @@ def verify_packet(packet_path: Path, env: Environment,
                                  "replay runner failed: %s" % exc, **base)
 
     stdout_hash = hashlib.sha256(stdout.encode("utf-8", "replace")).hexdigest()
+    ran = {"argv": argv, "command": list(INNER_COMMAND), "exit_code": exit_code,
+           "stdout_sha256": stdout_hash}
     if exit_code != 0:
         return ReplayOutcome("refused", EXIT_REFUSED,
                              "replay exited %d; a failed replay is not a pass" % exit_code,
-                             argv=argv, exit_code=exit_code, stdout_sha256=stdout_hash, **base)
+                             **ran, **base)
     rederived = _parse_rederived(stdout)
     if not rederived:
         return ReplayOutcome("refused", EXIT_REFUSED,
                              "replay printed no 're-derived N /M values' line",
-                             argv=argv, exit_code=exit_code, stdout_sha256=stdout_hash, **base)
+                             **ran, **base)
     if rederived != manifest.expected_rederived:
         return ReplayOutcome("refused", EXIT_REFUSED,
                              "re-derived line disagrees with the packet's stored denominator",
-                             argv=argv, exit_code=exit_code, stdout_sha256=stdout_hash,
-                             rederived=rederived, **base)
+                             rederived=rederived, disagrees=True, **ran, **base)
     return ReplayOutcome("certified", EXIT_OK, "replay reproduced the packet's stored denominator",
-                         argv=argv, exit_code=exit_code, stdout_sha256=stdout_hash,
-                         rederived=rederived, **base)
+                         rederived=rederived, **ran, **base)

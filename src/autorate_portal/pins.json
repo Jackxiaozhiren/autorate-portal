@@ -1,0 +1,14 @@
+{
+  "schema": "autorate-portal/pins@1",
+  "note": "Distributions this portal has agreed to replay. A packet pins a version and a wheel sha256; this file is the second reader of that pin, so a forged manifest cannot bootstrap itself from a reachable index.",
+  "pins": [
+    {
+      "name": "autorate",
+      "version": "0.1.2",
+      "wheel": "autorate-0.1.2-py3-none-any.whl",
+      "sha256": "7709d3faa560417efcbd8066f6db79d741d995bbbb9b23d2d595ed2a6fb38205",
+      "source": "https://pypi.org/pypi/autorate/0.1.2/json",
+      "registered": "2026-11-09"
+    }
+  ]
+}

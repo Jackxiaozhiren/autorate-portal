@@ -1,0 +1,88 @@
+"""T10 - doctor reaches the not-run verdict before a replay is spent (M2, AC10)."""
+from __future__ import annotations
+
+from autorate_portal import EXIT_NOT_RUN, EXIT_OK
+from autorate_portal.doctor import exit_code, examine, render
+from autorate_portal.replay import Environment
+from conftest import tamper_bundle
+
+
+def _env(*, docker=True, network=True):
+    return Environment(docker_available=docker, network_available=network,
+                       docker_detail="docker daemon unavailable (injected)",
+                       network_detail="PyPI unreachable (injected)")
+
+
+def _check(checks, name):
+    return next(check for check in checks if check.name == name)
+
+
+def test_a_ready_machine_has_no_failing_check(built):
+    checks = examine(backend="container", packet_path=built[0], env=_env())
+    assert [check.name for check in checks] == ["python", "uv", "docker", "pypi", "registry", "packet"]
+    assert [check.name for check in checks if check.status == "fail"] == []
+    assert exit_code(checks) == EXIT_OK
+
+
+def test_missing_docker_fails_the_container_backend_and_exits_not_run():
+    checks = examine(backend="container", env=_env(docker=False))
+    docker = _check(checks, "docker")
+    assert docker.status == "fail"
+    assert "docker daemon unavailable" in docker.detail
+    assert exit_code(checks) == EXIT_NOT_RUN
+
+
+def test_the_uv_backend_does_not_require_docker():
+    checks = examine(backend="uv", env=_env(docker=False))
+    assert _check(checks, "docker").status == "not-required"
+    assert exit_code(checks) == EXIT_OK
+
+
+def test_missing_network_fails_every_backend():
+    for backend in ("container", "uv"):
+        checks = examine(backend=backend, env=_env(network=False))
+        assert _check(checks, "pypi").status == "fail"
+        assert exit_code(checks) == EXIT_NOT_RUN
+
+
+def test_doctor_does_not_speak_the_certificate_vocabulary(built):
+    text = render(examine(backend="container", packet_path=built[0], env=_env())).lower()
+    for word in ("certified", "certifies", "certificate"):
+        assert word not in text
+
+
+def test_a_usable_registry_is_reported_with_its_pins():
+    registry = _check(examine(backend="container", env=_env()), "registry")
+    assert registry.status == "ok" and "autorate==0.1.2" in registry.detail
+
+
+def test_a_broken_registry_is_a_failing_check(tmp_path):
+    broken = tmp_path / "pins.json"
+    broken.write_text("{}", encoding="utf-8")
+    checks = examine(backend="container", registry_path=broken, env=_env())
+    assert _check(checks, "registry").status == "fail"
+    assert exit_code(checks) == EXIT_NOT_RUN
+
+
+def test_a_tampered_packet_is_a_failing_check(built):
+    tamper_bundle(built[0], "data/cert_laya.json", b"tampered")
+    checks = examine(backend="container", packet_path=built[0], env=_env())
+    packet = _check(checks, "packet")
+    assert packet.status == "fail"
+    assert "data/cert_laya.json" in packet.detail
+    assert exit_code(checks) == EXIT_NOT_RUN
+
+
+def test_no_packet_is_reported_as_not_required_rather_than_ok():
+    checks = examine(backend="container", env=_env())
+    assert _check(checks, "packet").status == "not-required"
+    assert exit_code(checks) == EXIT_OK
+
+
+def test_the_rendered_table_has_one_line_per_check():
+    checks = examine(backend="container", env=_env())
+    lines = render(checks).splitlines()
+    assert len(lines) == len(checks)
+    for check, line in zip(checks, lines):
+        assert line.split()[0] == check.name
+        assert check.status in line

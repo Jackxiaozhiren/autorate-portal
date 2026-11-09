@@ -1,7 +1,8 @@
-"""Command surface for M1: packet build | verify | html, and verify-packet.
+"""Command surface: packet build | verify | html, verify-packet, doctor, run.
 
-Exit codes (portal's own, documented in README): 0 certified, 2 usage,
-3 not-run, 4 refusal/drift. A not-run state is never reported as a pass.
+Exit codes (portal's own, documented in README): 0 ok, 2 usage, 3 not-run,
+4 refusal or mismatch. A not-run state is never reported as a pass, and a
+mismatch is a refusal of the stored summary rather than a wider pass.
 """
 from __future__ import annotations
 
@@ -11,6 +12,8 @@ import sys
 from pathlib import Path
 
 from . import EXIT_OK, EXIT_REFUSED, EXIT_USAGE, __version__
+from .doctor import examine, exit_code as doctor_exit, render as render_doctor
+from .engine import append_row, find_row, read_rows, run as run_job
 from .html import render
 from .manifest import sha256_bytes
 from .packet import MissingArtefact, build, verify_bundle
@@ -99,6 +102,69 @@ def cmd_verify_packet(args) -> int:
     return outcome.rc
 
 
+def cmd_doctor(args) -> int:
+    checks = examine(backend=args.backend,
+                     registry_path=Path(args.registry) if args.registry else None,
+                     packet_path=Path(args.packet) if args.packet else None)
+    print(render_doctor(checks))
+    code = doctor_exit(checks)
+    failed = [check.name for check in checks if check.status == "fail"]
+    print("required checks: %s" % ("all ok" if not failed else "failed: %s" % ", ".join(failed)))
+    return code
+
+
+def cmd_run(args) -> int:
+    row = run_job(Path(args.packet), backend=args.backend,
+                  registry_path=Path(args.registry) if args.registry else None)
+    print("state            : %s" % row.state)
+    print("reason           : %s" % row.reason)
+    print("run_id           : %s" % row.run_id)
+    print("distribution     : %s" % row.distribution)
+    print("command          : %s" % json.dumps(row.command))
+    print("argv             : %s" % json.dumps(row.argv))
+    print("exit_code        : %s" % json.dumps(row.exit_code))
+    print("stdout_sha256    : %s" % row.stdout_sha256)
+    print("digest_stored    : %s" % row.digest_stored)
+    print("digest_replayed  : %s" % row.digest_replayed)
+    if row.denominator_stored or row.denominator_replayed:
+        print("denominator      : stored %s, replayed %s"
+              % (row.denominator_stored or "-", row.denominator_replayed or "-"))
+    for refusal in row.refusals:
+        print("REFUSED: %s" % refusal.path)
+        print("  reason  : %s" % refusal.reason)
+        if refusal.expected:
+            print("  expected: %s" % refusal.expected)
+        if refusal.actual:
+            print("  actual  : %s" % refusal.actual)
+    if args.runs:
+        created = append_row(Path(args.runs), row)
+        print("stored           : %s%s" % (args.runs, "" if created else " (idempotent hit)"))
+    return row.rc
+
+
+def cmd_runs_list(args) -> int:
+    rows = read_rows(Path(args.runs))
+    if not rows:
+        print("no runs recorded in %s" % args.runs)
+        return EXIT_OK
+    for row in rows:
+        print("%s  %-9s  %-9s  %-22s  exit=%-4s  %s / %s"
+              % (str(row.get("run_id"))[:12], row.get("state"), row.get("backend"),
+                 str(row.get("packet_id"))[:22], json.dumps(row.get("exit_code")),
+                 row.get("denominator_stored") or "-", row.get("denominator_replayed") or "-"))
+    print("%d run(s)" % len(rows))
+    return EXIT_OK
+
+
+def cmd_runs_show(args) -> int:
+    row = find_row(Path(args.runs), args.run_id)
+    if row is None:
+        print("no run %s in %s" % (args.run_id, args.runs), file=sys.stderr)
+        return EXIT_USAGE
+    print(json.dumps(row, indent=2, sort_keys=True))
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autorate-portal",
                                      description="M1 evidence packets for autorate")
@@ -135,6 +201,29 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--backend", choices=("container", "uv"), default="container")
     r.add_argument("--image", default="python:3.13-slim")
     r.set_defaults(fn=cmd_verify_packet)
+
+    d = sub.add_parser("doctor", help="report what this machine can be asked to do (M2)")
+    d.add_argument("--backend", choices=("container", "uv"), default="container")
+    d.add_argument("--registry", default=None, help="pinned-distribution registry (default: packaged)")
+    d.add_argument("--packet", default=None, help="optional packet to check as well")
+    d.set_defaults(fn=cmd_doctor)
+
+    j = sub.add_parser("run", help="run one replay job and record the run row (M2, AC4, I5)")
+    j.add_argument("packet")
+    j.add_argument("--backend", choices=("container", "uv"), default="container")
+    j.add_argument("--registry", default=None)
+    j.add_argument("--runs", default=None, help="append the run row to this JSONL store")
+    j.set_defaults(fn=cmd_run)
+
+    runs = sub.add_parser("runs", help="inspect recorded run rows")
+    rsub = runs.add_subparsers(dest="runs_command", required=True)
+    rl = rsub.add_parser("list", help="list recorded runs")
+    rl.add_argument("--runs", required=True)
+    rl.set_defaults(fn=cmd_runs_list)
+    rs = rsub.add_parser("show", help="show one run row as JSON")
+    rs.add_argument("run_id")
+    rs.add_argument("--runs", required=True)
+    rs.set_defaults(fn=cmd_runs_show)
     return parser
 
 

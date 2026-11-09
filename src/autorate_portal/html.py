@@ -3,8 +3,10 @@
 The renderer reads numbers out of artefacts and formats them. It computes no
 statistic: there is no arithmetic here, no aggregation and no percent. A number
 whose (denominator, rubric, packet+digest) triple is incomplete renders as
-"unavailable" (I2). A refusal renders as refusal text, never a zero, a dash or
-an empty card (I3). Records artefacts are never embedded (section 8.4).
+"unavailable" (I2), and the guard that enforces it lives in ``emit.py`` so there
+is exactly one place a number can become text. A refusal renders as refusal
+text, never a zero, a dash or an empty card (I3). Records artefacts are never
+embedded (section 8.4).
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import html
 import json
 from typing import Any
 
+from . import emit
 from .manifest import Manifest
 
 STYLE = """
@@ -33,35 +36,6 @@ def e(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
-def _triple(manifest: Manifest, certificate: dict[str, Any]) -> tuple[bool, str, str]:
-    """(complete, rendered triple, missing component name)."""
-    n_cal = certificate.get("n_cal")
-    n_eval = certificate.get("n_eval")
-    rubric = manifest.rubric
-    budget = [rubric.get(k) for k in ("alpha", "beta", "delta", "method", "seed")]
-    unit = (certificate.get("meta") or {}).get("at_requested_alpha", {}).get("bound_unit")
-    if not unit:
-        unit = (certificate.get("meta") or {}).get("bound_unit")
-
-    missing = []
-    if n_cal is None or n_eval is None:
-        missing.append("denominator")
-    if any(v is None for v in budget):
-        missing.append("budget/rubric")
-    if not manifest.packet_id or not manifest.protocol_digest:
-        missing.append("packet id + protocol digest")
-    if unit is None:
-        missing.append("bound_unit")
-    if missing:
-        return False, "", ", ".join(sorted(missing))
-
-    text = ("denominator: n_cal=%s n_eval=%s; budget/rubric: alpha=%s beta=%s delta=%s "
-            "method=%s seed=%s; packet: %s / %s; bound_unit: %s"
-            % (n_cal, n_eval, budget[0], budget[1], budget[2], budget[3], budget[4],
-               manifest.packet_id, manifest.protocol_digest, unit))
-    return True, e(text), ""
-
-
 def render_certificate(manifest: Manifest, path: str, raw: bytes) -> str:
     try:
         certificate = json.loads(raw)
@@ -72,7 +46,8 @@ def render_certificate(manifest: Manifest, path: str, raw: bytes) -> str:
         return ('<div class="card refusal"><strong>NOT_INFORMATIVE</strong> — '
                 'artefact %s is not a certificate object.</div>' % e(path))
 
-    complete, triple, missing = _triple(manifest, certificate)
+    values = emit.components(manifest, certificate)
+    absent = sorted(emit.missing_components(values))
     head = '<h2>%s</h2>' % e(path)
 
     if certificate.get("feasible") is not True:
@@ -83,21 +58,24 @@ def render_certificate(manifest: Manifest, path: str, raw: bytes) -> str:
         lines = ''.join('<p>%s</p>' % e(line) for line in envelope)
         return (head + '<div class="card refusal"><strong>%s</strong> — reason: %s%s</div>'
                 % (state, reason_text, lines)
-                + ('<p class="triple">%s</p>' % triple if complete else
+                + ('<p class="triple">%s</p>' % emit.triple_html(values) if not absent else
                    '<div class="unavailable">unavailable: %s not published by this certificate</div>'
-                   % e(missing)))
-
-    if not complete:
-        return (head + '<div class="card unavailable">unavailable: %s not published by this '
-                'certificate; the number is not rendered.</div>' % e(missing))
+                   % e(", ".join(absent))))
 
     value = certificate.get("autorate")
     if value is None:
         return (head + '<div class="card refusal"><strong>NOT_INFORMATIVE</strong> — '
                 'feasible is true but autorate was not published.</div>'
-                + '<p class="triple">%s</p>' % triple)
-    return (head + '<div class="card"><div>autorate: <code>%s</code></div>'
-            '<p class="triple">%s</p></div>' % (e(value), triple))
+                + ('<p class="triple">%s</p>' % emit.triple_html(values) if not absent else
+                   '<div class="unavailable">unavailable: %s not published by this certificate</div>'
+                   % e(", ".join(absent))))
+
+    try:
+        return head + emit.statistic(label="autorate", value=value, values=values)
+    except emit.EmitRefused as refusal:
+        return (head + '<div class="card unavailable">unavailable: %s not published by this '
+                'certificate; the number is not rendered.</div>'
+                % e(", ".join(sorted(refusal.missing))))
 
 
 def render(manifest: Manifest, files: dict[str, bytes]) -> str:
