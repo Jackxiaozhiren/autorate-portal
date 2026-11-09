@@ -78,8 +78,15 @@ the org-private packet and therefore reports `not-run` for a shareable packet.
 
 ```bash
 uv run --frozen --extra dev pytest -q
+uv run --frozen --extra dev python tools/plants.py
 python tools/i6_plant.py <packet.tar> --backend uv
 ```
+
+`tools/plants.py` runs 21 negative controls: each mutates exactly one guard, proves in a fresh
+interpreter that the mutated module is what actually runs, observes the target test go red, then
+restores the source with a sha256 receipt. Each child gets its own bytecode cache, because CPython
+invalidates `.pyc` by `(source mtime in seconds, size)` — on a fast CI runner, several plants can
+otherwise land inside the same second and silently reuse a stale cache.
 
 The I6 plant swaps the pinned wheel hash, observes a named refusal with both hashes, and restores
 the original bundle with a before/after sha256 receipt. A plant that cannot fail is not evidence.

@@ -4,9 +4,18 @@ A guard that cannot fail is not evidence. For each plant this harness:
 
 1. asserts the exact source fragment is present once (so a rename cannot make
    the plant silently inert),
-2. mutates that one fragment,
-3. runs the single test that must go red and records its real exit code,
-4. restores the original bytes and verifies the sha256 receipt.
+2. mutates that one fragment AND appends a runtime-visible marker,
+3. proves in a fresh child interpreter that the mutated module is what actually
+   executes (section 6.2: prove the removal landed, not just that bytes changed),
+4. runs the single test that must go red and records its real exit code,
+5. restores the original bytes and verifies the sha256 receipt.
+
+Each child gets its own ``PYTHONPYCACHEPREFIX`` and ``PYTHONDONTWRITEBYTECODE``.
+This matters: CPython invalidates a .pyc by (source mtime in *seconds*, size).
+On a fast CI runner several plants can land inside one second with equal file
+sizes, so a stale .pyc from the previous plant would otherwise be reused and
+the current plant would look red without ever having landed. A plant that is
+not observed at runtime is reported as INERT and fails the harness.
 
 No skip, xfail, ignore or exemption is added at any point. Run from the repo
 root with the dev environment installed:
@@ -16,13 +25,24 @@ root with the dev environment installed:
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "autorate_portal"
+MARKER = "\n_PLANT_LANDED_MARKER = %r\n"
+PROBE = (
+    "import importlib, sys; "
+    "m = importlib.import_module('autorate_portal.%s'); "
+    "assert getattr(m, '_PLANT_LANDED_MARKER', None) == sys.argv[1], "
+    "'mutated module is not what executed'; "
+    "print('RUNTIME_LANDED')"
+)
 
 
 @dataclass(frozen=True)
@@ -128,44 +148,82 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def run_test(nodeid: str) -> int:
-    proc = subprocess.run([sys.executable, "-m", "pytest", "-q", nodeid],
-                          cwd=ROOT, capture_output=True, text=True, timeout=180)
-    return proc.returncode
+def child_env(cache: Path) -> dict[str, str]:
+    """Force every child to import the current working tree, with no stale .pyc."""
+    existing = os.environ.get("PYTHONPATH", "")
+    pythonpath = str(ROOT / "src") + (os.pathsep + existing if existing else "")
+    return {**os.environ,
+            "PYTHONPATH": pythonpath,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPYCACHEPREFIX": str(cache)}
+
+
+def probe_module(plant: Plant, env: dict[str, str]) -> bool:
+    module = plant.filename[:-3]
+    proc = subprocess.run([sys.executable, "-B", "-c", PROBE % module, plant.name],
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        print("  PROBE FAILED: %s" % (proc.stdout + proc.stderr).strip()[:300])
+    return proc.returncode == 0
+
+
+def run_test(nodeid: str, env: dict[str, str]) -> tuple[int, str]:
+    proc = subprocess.run([sys.executable, "-B", "-m", "pytest", "-q", nodeid],
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    return proc.returncode, (proc.stdout + proc.stderr)[-600:]
+
+
+def clear_bytecode() -> None:
+    for directory in (ROOT / "src", ROOT / "tests", ROOT / "tools"):
+        for cache in directory.rglob("__pycache__"):
+            shutil.rmtree(cache, ignore_errors=True)
 
 
 def main() -> int:
-    py = sys.executable
-    print("PLANT HARNESS python=%s plants=%d" % (py, len(PLANTS)))
+    print("PLANT HARNESS python=%s plants=%d" % (sys.executable, len(PLANTS)))
+    clear_bytecode()
     before_all = {p: (SRC / p).read_bytes() for p in sorted({x.filename for x in PLANTS})}
     receipts = {p: digest(data) for p, data in before_all.items()}
 
     fired = 0
+    landed_runtime = 0
     restored = 0
     for plant in PLANTS:
         path = SRC / plant.filename
         original = before_all[plant.filename]
-        count = original.decode("utf-8").count(plant.old)
+        text = original.decode("utf-8")
+        count = text.count(plant.old)
         if count != 1:
             print("PLANT %-36s INERT (fragment count=%d)" % (plant.name, count))
             continue
-        mutated = original.decode("utf-8").replace(plant.old, plant.new, 1).encode("utf-8")
+        mutated = (text.replace(plant.old, plant.new, 1)
+                   + (MARKER % plant.name)).encode("utf-8")
         landed = mutated != original
         path.write_bytes(mutated)
         try:
-            rc = run_test(plant.test)
+            with tempfile.TemporaryDirectory(prefix="plant-pyc-") as cache:
+                env = child_env(Path(cache))
+                probe_ok = probe_module(plant, env)
+                rc, tail = run_test(plant.test, env)
         finally:
             path.write_bytes(original)
         after = path.read_bytes()
         ok_restore = digest(after) == receipts[plant.filename]
-        red = landed and rc != 0
+        red = landed and probe_ok and rc != 0
         fired += int(red)
+        landed_runtime += int(probe_ok)
         restored += int(ok_restore)
-        print("PLANT %-36s landed=%s test_rc=%-3s RED=%-5s RESTORED=%s"
-              % (plant.name, landed, rc, red, ok_restore))
+        print("PLANT %-36s landed=%s runtime=%s test_rc=%-3s RED=%-5s RESTORED=%s"
+              % (plant.name, landed, probe_ok, rc, red, ok_restore))
+        if not red:
+            print("  TEST OUTPUT TAIL: %s" % tail.replace("\n", " | ")[-400:])
 
-    print("PLANT SUMMARY total=%d red=%d restored=%d" % (len(PLANTS), fired, restored))
-    verdict = fired == len(PLANTS) and restored == len(PLANTS)
+    clear_bytecode()
+    leftover = [p.name for p in SRC.glob("*.py") if "_PLANT_LANDED_MARKER" in p.read_text()]
+    print("PLANT SUMMARY total=%d runtime_landed=%d red=%d restored=%d leftover_markers=%s"
+          % (len(PLANTS), landed_runtime, fired, restored, leftover))
+    verdict = (fired == len(PLANTS) and landed_runtime == len(PLANTS)
+               and restored == len(PLANTS) and not leftover)
     print("PLANT VERDICT: %s" % ("ALL RED, ALL RESTORED" if verdict else "FAILED"))
     return 0 if verdict else 1
 
