@@ -114,7 +114,7 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_run(args) -> int:
-    row = run_job(Path(args.packet), backend=args.backend,
+    row = run_job(Path(args.packet), backend=args.backend, image=args.image,
                   registry_path=Path(args.registry) if args.registry else None)
     print("state            : %s" % row.state)
     print("reason           : %s" % row.reason)
@@ -211,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     j = sub.add_parser("run", help="run one replay job and record the run row (M2, AC4, I5)")
     j.add_argument("packet")
     j.add_argument("--backend", choices=("container", "uv"), default="container")
+    j.add_argument("--image", default="python:3.13-slim")
     j.add_argument("--registry", default=None)
     j.add_argument("--runs", default=None, help="append the run row to this JSONL store")
     j.set_defaults(fn=cmd_run)

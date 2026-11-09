@@ -142,7 +142,8 @@ def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
 
 
 def run(packet_path: Path, *, backend: str = "container", registry_path: Path | None = None,
-        env: Environment | None = None, store_path: Path | None = None) -> RunRow:
+        env: Environment | None = None, store_path: Path | None = None,
+        image: str = "python:3.13-slim") -> RunRow:
     """Execute one replay job and, if a store is given, record it."""
     packet = Path(packet_path)
     verification = verify_bundle(packet)
@@ -182,7 +183,7 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
                    refusals=problems)
         return _record(row, store_path)
 
-    environment = env or probe_environment()
+    environment = env or probe_environment(image=image)
     outcome = verify_packet(packet, environment, backend=backend)
     image = environment.image if backend == "container" else ""
     state = classify(outcome)

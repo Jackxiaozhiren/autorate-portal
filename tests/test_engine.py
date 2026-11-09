@@ -191,3 +191,14 @@ def test_a_malformed_store_is_named_not_silently_skipped(tmp_path):
         assert "line 2 is not JSON" in str(exc)
     else:
         raise AssertionError("a malformed store must not read as empty")
+
+
+def test_the_run_command_accepts_the_image_flag():
+    """A gate that passes --image must not die in argparse with rc 2."""
+    from autorate_portal.cli import build_parser
+
+    for argv in (["run", "packet.tar", "--image", "python:3.12-slim"],
+                 ["verify-packet", "packet.tar", "--image", "python:3.12-slim"]):
+        args = build_parser().parse_args(argv)
+        assert args.image == "python:3.12-slim", argv
+        assert args.backend == "container", argv
