@@ -26,6 +26,9 @@ from .packet import Refusal, Verification, read_bundle, verify_bundle
 REDERIVED_LINE = re.compile(r"re-derived\s+([0-9]+)\s*/([0-9]+)\s+values")
 PYPI_JSON = "https://pypi.org/pypi/autorate/json"
 INNER_COMMAND = ["verify", "--protocol", "protocol.json"]
+CONTAINER_PROBE = ["python", "-c",
+                   "import urllib.request;"
+                   "urllib.request.urlopen('https://pypi.org/pypi/autorate/json', timeout=10)"]
 REPLAY_PY = "from autorate.cli import main\nraise SystemExit(main(%r))\n" % (INNER_COMMAND,)
 CONTAINER_SH = """#!/bin/sh
 set -e
@@ -75,6 +78,34 @@ class ReplayOutcome:
                 "stdout_sha256": self.stdout_sha256, "digest_then": self.digest_then,
                 "packet_id_in": self.packet_id_in, "state": self.state,
                 "disagrees": self.disagrees}
+
+
+def probe_container_network(image: str,
+                            runner: Callable[..., subprocess.CompletedProcess] | None = None
+                            ) -> tuple[bool, str]:
+    """Can the *image* reach the index, not just this host?
+
+    The host-level probe above cannot see inside the container, and the
+    difference matters: a container without egress fails while installing the
+    pinned wheel's dependencies, which surfaces as ``refused`` with exit 1 and
+    reads like a packet defect. ``doctor`` asks this question first so the
+    machine gets blamed for its own missing egress.
+    """
+    docker = shutil.which("docker")
+    if not docker:
+        return False, "docker executable not found"
+    run = runner or (lambda argv, **kw: subprocess.run(argv, capture_output=True, text=True,
+                                                      timeout=180, **kw))
+    argv = [docker, "run", "--rm", image] + CONTAINER_PROBE
+    try:
+        proc = run(argv)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, "container network probe failed: %s" % exc
+    if proc.returncode == 0:
+        return True, "%s reaches PyPI from inside the container" % image
+    lines = [line for line in (proc.stderr or proc.stdout or "").strip().splitlines() if line.strip()]
+    return False, "container cannot reach PyPI: %s" % (lines[-1][:180] if lines else
+                                                      "rc=%d" % proc.returncode)
 
 
 def probe_environment(image: str = "python:3.13-slim") -> Environment:

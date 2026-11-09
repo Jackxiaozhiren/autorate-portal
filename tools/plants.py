@@ -186,6 +186,12 @@ PLANTS: tuple[Plant, ...] = (
           '    return Check("docker", "ok" if env.docker_available else "fail", env.docker_detail)',
           '    return Check("docker", "ok", env.docker_detail)',
           "tests/test_doctor.py::test_missing_docker_fails_the_container_backend_and_exits_not_run"),
+    Plant("doctor-container-network-false-ok", "doctor.py",
+          '    reachable, detail = probe(image)\n'
+          '    return Check("container-network", "ok" if reachable else "fail", detail)',
+          '    reachable, detail = probe(image)\n'
+          '    return Check("container-network", "ok", detail)',
+          "tests/test_doctor.py::test_container_without_egress_is_a_failing_check"),
     Plant("engine-second-executor", "engine.py",
           "import json\nfrom dataclasses import dataclass, field",
           "import json\nimport subprocess  # a second executor must be caught by the static rule\n"

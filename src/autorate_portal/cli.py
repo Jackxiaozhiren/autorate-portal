@@ -105,7 +105,8 @@ def cmd_verify_packet(args) -> int:
 def cmd_doctor(args) -> int:
     checks = examine(backend=args.backend,
                      registry_path=Path(args.registry) if args.registry else None,
-                     packet_path=Path(args.packet) if args.packet else None)
+                     packet_path=Path(args.packet) if args.packet else None,
+                     image=args.image)
     print(render_doctor(checks))
     code = doctor_exit(checks)
     failed = [check.name for check in checks if check.status == "fail"]
@@ -206,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--backend", choices=("container", "uv"), default="container")
     d.add_argument("--registry", default=None, help="pinned-distribution registry (default: packaged)")
     d.add_argument("--packet", default=None, help="optional packet to check as well")
+    d.add_argument("--image", default="python:3.13-slim")
     d.set_defaults(fn=cmd_doctor)
 
     j = sub.add_parser("run", help="run one replay job and record the run row (M2, AC4, I5)")

@@ -21,10 +21,11 @@ from pathlib import Path
 from . import EXIT_NOT_RUN, EXIT_OK
 from .distributions import load_registry
 from .packet import verify_bundle
-from .replay import Environment, probe_environment
+from .replay import Environment, probe_container_network, probe_environment
 
 MIN_PYTHON = (3, 10)
 CERTIFICATE_WORDS = ("certified", "certifies", "passed")
+DEFAULT_IMAGE = "python:3.13-slim"
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,16 @@ def _docker(backend: str, env: Environment) -> Check:
     return Check("docker", "ok" if env.docker_available else "fail", env.docker_detail)
 
 
+def _container_network(backend: str, env: Environment, image: str, probe) -> Check:
+    """Egress from inside the container, which the host-level probe cannot see."""
+    if backend != "container":
+        return Check("container-network", "not-required", "only the container backend needs it")
+    if not env.docker_available:
+        return Check("container-network", "not-required", "docker itself already failed")
+    reachable, detail = probe(image)
+    return Check("container-network", "ok" if reachable else "fail", detail)
+
+
 def _pypi(env: Environment) -> Check:
     if env.network_available:
         return Check("pypi", "ok", env.network_detail)
@@ -81,10 +92,13 @@ def _packet(packet_path: Path | None) -> Check:
 
 
 def examine(*, backend: str = "container", registry_path: Path | None = None,
-            packet_path: Path | None = None, env: Environment | None = None) -> list[Check]:
-    environment = env or probe_environment()
-    return [_python(), _uv(backend), _docker(backend, environment), _pypi(environment),
-            _registry(registry_path), _packet(packet_path)]
+            packet_path: Path | None = None, env: Environment | None = None,
+            image: str = DEFAULT_IMAGE,
+            container_probe=probe_container_network) -> list[Check]:
+    environment = env or probe_environment(image=image)
+    return [_python(), _uv(backend), _docker(backend, environment),
+            _container_network(backend, environment, image, container_probe),
+            _pypi(environment), _registry(registry_path), _packet(packet_path)]
 
 
 def exit_code(checks: list[Check]) -> int:
