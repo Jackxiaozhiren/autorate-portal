@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autorate-portal"
+version = "0.1.0"
+description = "Evidence packets for certified automation rates; the portal tier computes no statistic."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["pydantic>=2.6,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+autorate-portal = "autorate_portal.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autorate_portal"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
