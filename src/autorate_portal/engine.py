@@ -6,10 +6,13 @@ when it cannot run - and one prohibition: *no endpoint computes a bound*. This
 module therefore stores numbers the replay printed and hashes; it never derives
 one, never averages two, and never fills a missing value.
 
-Section 4.3's run row is the unit of record. A row is written once and is
-idempotent on ``run_id``, the AC14 pattern applied to runs: re-running the same
-packet with the same backend produces the same id and does not append a second
-row.
+Section 4.3's run row is the unit of record, and each attempt is its own row.
+This started as "idempotent on ``run_id``, the AC14 pattern applied to runs";
+that was wrong on two counts. AC14 is about ingesting the same *packet* twice,
+and CI showed a replay's stdout hash moves with the container's package-install
+output, so an identity keyed on "the same observation" would have deduplicated
+nothing while claiming to. A monitor's re-runs are a series of observations, not
+duplicates of one, so the store is append-only and the id names the attempt.
 
 States (Section 5.11, AC4):
 
@@ -34,8 +37,9 @@ from .replay import Environment, probe_environment, verify_packet
 STATES = ("certified", "mismatch", "refused", "not-run")
 STATE_RC = {"certified": EXIT_OK, "mismatch": EXIT_REFUSED, "refused": EXIT_REFUSED,
             "not-run": EXIT_NOT_RUN}
-RUN_ID_FIELDS = ("packet_id", "backend", "image", "command", "distribution", "state",
-                 "reason", "stdout_sha256")
+RUN_ID_FIELDS = ("packet_id", "backend", "image", "argv", "command", "distribution",
+                 "state", "reason", "exit_code", "stdout_sha256", "digest_stored",
+                 "digest_replayed", "denominator_stored", "denominator_replayed")
 
 
 @dataclass(frozen=True)
@@ -90,19 +94,11 @@ def describe(refusals: list[Refusal]) -> str:
 
 
 def run_id_for(observation: dict[str, Any]) -> str:
-    """Identity of a run is what was asked *and* what happened.
+    """Identity of one attempt: what was asked, and what came back.
 
-    Two attempts that produced different observations - a refusal then a
-    certificate, or two different reasons for ``not-run`` - are two rows. The
-    same observation twice is one row, which is AC14's idempotence applied to
-    runs rather than to packets.
-
-    The outer ``argv`` is deliberately *not* part of the identity: it carries a
-    per-attempt temporary path (and, for the container backend, the mount
-    points), so keying on it would make every re-run a new row and idempotence
-    vacuous. The pinned invocation (``command``) and the image are in the
-    identity instead, which is what actually distinguishes one replay from
-    another. ``argv`` is still written on the row, as evidence.
+    Two attempts are two rows even when they agree, because a row is an
+    observation and a monitor needs the series. Including ``argv`` and the
+    stdout hash is what makes the id name the attempt rather than the job.
     """
     payload = {key: observation.get(key) for key in RUN_ID_FIELDS}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -129,8 +125,12 @@ def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
          denominator_stored: str, denominator_replayed: str, image: str = "",
          refusals: list[Refusal] | None = None) -> RunRow:
     observation = {"packet_id": packet_id, "backend": backend, "image": image,
-                   "command": list(command), "distribution": distribution, "state": state,
-                   "reason": reason, "stdout_sha256": stdout_sha256}
+                   "argv": list(argv), "command": list(command),
+                   "distribution": distribution, "state": state, "reason": reason,
+                   "exit_code": exit_code, "stdout_sha256": stdout_sha256,
+                   "digest_stored": digest_stored, "digest_replayed": digest_replayed,
+                   "denominator_stored": denominator_stored,
+                   "denominator_replayed": denominator_replayed}
     return RunRow(
         run_id=run_id_for(observation),
         packet_id=packet_id, backend=backend, image=image, distribution=distribution,
@@ -228,10 +228,8 @@ def read_rows(store_path: Path) -> list[dict[str, Any]]:
 
 
 def append_row(store_path: Path, row: RunRow) -> bool:
-    """Append unless this run_id is already stored. Returns True when appended."""
+    """Append one attempt to the store. Returns True once the line is written."""
     target = Path(store_path)
-    if any(stored.get("run_id") == row.run_id for stored in read_rows(target)):
-        return False
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row.as_json(), sort_keys=True) + "\n")

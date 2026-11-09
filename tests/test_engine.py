@@ -138,7 +138,14 @@ def test_an_unusable_registry_is_not_run_and_not_a_verdict_on_the_packet(built, 
     assert "registry unusable" in row.reason
 
 
-def test_the_same_observation_twice_is_one_row(built, tmp_path):
+def test_every_attempt_is_its_own_row(built, tmp_path):
+    """A monitor's re-runs are a series, not duplicates of one observation.
+
+    The first design keyed rows on "the same observation" and claimed AC14's
+    idempotence. CI showed why that is wrong: the replay's stdout hash moves
+    with the container's pip output, so the key never matched and the claim was
+    vacuous. Two attempts are two rows, each with its own argv and stdout hash.
+    """
     packet = built[0]
     _pin_packet_to_the_test_wheel(packet)
     registry = _registry(tmp_path, sha256_bytes(WHEEL_BYTES))
@@ -148,10 +155,14 @@ def test_the_same_observation_twice_is_one_row(built, tmp_path):
     first = run(packet, backend="container", registry_path=registry, env=env, store_path=store)
     second = run(packet, backend="container", registry_path=registry, env=env, store_path=store)
 
-    assert first.run_id == second.run_id
-    assert len(read_rows(store)) == 1
-    assert find_row(store, first.run_id)["state"] == "certified"
-    assert append_row(store, first) is False
+    rows = read_rows(store)
+    assert len(rows) == 2
+    assert first.run_id != second.run_id
+    assert [row["state"] for row in rows] == ["certified", "certified"]
+    assert {row["denominator_replayed"] for row in rows} == {"612 /612"}
+    assert all(row["argv"] and row["argv"][0] == "docker" for row in rows)
+    assert append_row(store, first) is True
+    assert len(read_rows(store)) == 3
 
 
 def test_a_different_observation_is_a_second_row(built, tmp_path):
@@ -167,6 +178,8 @@ def test_a_different_observation_is_a_second_row(built, tmp_path):
 
     assert certified.run_id != mismatch.run_id
     assert [row["state"] for row in read_rows(store)] == ["certified", "mismatch"]
+    assert find_row(store, certified.run_id)["state"] == "certified"
+    assert find_row(store, mismatch.run_id)["state"] == "mismatch"
 
 
 def test_a_malformed_store_is_named_not_silently_skipped(tmp_path):

@@ -172,11 +172,15 @@ jobs:
           import json
           rows = [json.loads(line) for line in open('packets/runs.jsonl') if line.strip()]
           certified = [r for r in rows if r['state'] == 'certified']
-          assert len(certified) == 1, 'the same observation twice must be one row: %s' % rows
-          row = certified[0]
-          assert row['denominator_replayed'] == '612 /612'
-          assert row['state'] != 'mismatch'
-          print('run store: 1 certified row, idempotent on the observation')
+          assert len(certified) == 2, 'two attempts, two rows: %s' % rows
+          assert certified[0]['run_id'] != certified[1]['run_id']
+          for row in certified:
+              assert row['denominator_replayed'] == '612 /612'
+              assert row['command'] == ['verify', '--protocol', 'protocol.json']
+              assert row['argv'] and row['argv'][0] == 'docker'
+              assert row['exit_code'] == 0
+              assert len(row['stdout_sha256']) == 64
+          print('run store: 2 attempts, 2 rows, both certified at 612 /612')
           PY
 
       - name: I6 plant - swapped wheel hash must go red, then restore

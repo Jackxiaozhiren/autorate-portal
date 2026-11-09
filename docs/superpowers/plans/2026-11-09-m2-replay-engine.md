@@ -99,8 +99,13 @@ class RunRow:
    the runner;
 2. resolves the pin (§3.1);
 3. calls `replay.verify_packet`, which is the only code that spawns a process;
-4. maps the outcome to a state (§4) and appends the row to `runs.jsonl`,
-   idempotent on `run_id` (the AC14 pattern, applied to runs);
+4. maps the outcome to a state (§4) and appends the row to `runs.jsonl` -
+   one row per attempt. This started as "idempotent on `run_id`, the AC14
+   pattern applied to runs" and that was wrong twice: AC14 is about ingesting
+   the same *packet* twice, and CI showed the replay's stdout hash moves with
+   the container's pip output, so an identity keyed on "the same observation"
+   would have deduplicated nothing while claiming to. A monitor's re-runs are
+   a series of observations, not duplicates of one;
 5. returns the row. Nothing here formats or computes a statistic — the row
    carries numbers the replay printed, and `digest_replayed` is a hash.
 

@@ -137,8 +137,8 @@ def cmd_run(args) -> int:
         if refusal.actual:
             print("  actual  : %s" % refusal.actual)
     if args.runs:
-        created = append_row(Path(args.runs), row)
-        print("stored           : %s%s" % (args.runs, "" if created else " (idempotent hit)"))
+        append_row(Path(args.runs), row)
+        print("stored           : %s" % args.runs)
     return row.rc
 
 
