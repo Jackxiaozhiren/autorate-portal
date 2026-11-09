@@ -1,8 +1,10 @@
 # M1 Evidence Packet — implementation plan (2026-11-09)
 
-Status: **plan only, no source edits**. Prepared in the M1 opening session. PRD §7 requires one
-plan per milestone with tasks at test-cycle size; this is that plan. It is held outside the frozen
-repo until the owner decides where the `autorate-portal` repository lives (see Blocker B1).
+Status: **implemented 2026-11-09** in commits `0eb1c64` and `4c4ff1d`. Prepared in the M1 opening
+session as a plan with tasks at test-cycle size (PRD §7); T1–T10 below are that plan and are kept
+as the record of what was ordered, not rewritten into a report. The owner authorised a public
+`autorate-portal` repository on 2026-11-09 (see §3). Gate readings and the §13.2 report are in the
+external evidence directory; this file is the plan, not the report.
 
 ## 1. Definition of done (PRD §7, M1 row)
 
@@ -32,15 +34,15 @@ portal HTTP API (M3), any `--format json` change to `autorate` (M5, freeze round
 
 Hard rule §0.4 satisfied: B3 exits 0, so M1 may start. Denominators for NIF comparison: **649 /649**.
 
-## 3. Blockers that require an owner decision
+## 3. Blockers, as recorded in the opening session
 
-- **B1 (blocking).** PRD §7 puts M1 in the `portal` repo; §12.3 A3 fixes the name
-  `autorate-portal` / import package `autorate_portal`. Neither a local directory under the
-  workspace nor a GitHub repository with that name exists (checked 2026-11-09). §13.5 says
-  "Do not carry the previous session's approval forward" and §0.2 carve-outs (a) and (b) still
-  apply. Creating a **public** GitHub repository is an external action, so it waits for an
-  explicit instruction. A local-only scaffold is possible without that instruction but would
-  leave M1 without the CI that I6's plant requires.
+- **B1 (was blocking, resolved 2026-11-09).** PRD §7 puts M1 in the `portal` repo; §12.3 A3 fixes
+  the name `autorate-portal` / import package `autorate_portal`. At the time this plan was written
+  neither a local directory nor a GitHub repository with that name existed. §13.5 forbids carrying
+  the previous session's approval forward, so creation waited for a fresh instruction. On
+  2026-11-09 the owner answered "创建且公开" and separately approved starting T1; the public
+  repository `Jackxiaozhiren/autorate-portal` was created and the plan executed. This paragraph
+  records the blocker as it stood, not as an open decision.
 - **B2 (not blocking).** `verify-packet` needs a pinned, resolvable distribution. PyPI carries
   `autorate 0.1.0` and, after this session's release, `0.1.2`. Pin the wheel by SHA-256 in the
   packet manifest, never by a floating version.
@@ -96,7 +98,7 @@ Type spellings are fixed by §13.3 item 3: `bound_unit`, `protocol_digest`, `man
 10. **T10 reproducibility from a clean checkout.** `git clone` the pinned revision into a fresh
     container, rebuild, byte-compare the packet.
 
-## 6. Gate mapping (PRD §13.1) — to be run at the stop point
+## 6. Gate mapping (PRD §13.1) — run at the stop point; readings in the §13.2 report
 
 | Gate | M1 evidence |
 |---|---|
