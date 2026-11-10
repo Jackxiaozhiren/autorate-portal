@@ -199,13 +199,21 @@ itself a failure.
 | Frozen-repo non-interference | `uv run --frozen autorate verify --protocol protocol.json` | rc 0, `re-derived 649 /649 values` identical to B3 |
 | Published-artefact untouched | `git diff --name-only HEAD~1 -- data/ docs/` in the frozen repo | empty of `data/`; the ledger is the one counted exception |
 | New-file coverage | each new guard re-run after commit with explicit paths | rc 0 |
-| Corpus-absent export lane | `git archive` + `.tracked-files` + `AUTORATE_TRACKED_FILES=… pytest` | 0 failed; the 2026-11-09 reading was `1227 passed, 31 skipped` / `612 /612` |
+| Corpus-absent export lane | `git archive` + `.tracked-files`, then `AUTORATE_FEISHU_ROOT=/nonexistent AUTORATE_TRACKED_FILES=… pytest` — **both** variables | 0 failed; the 2026-11-09 reading was `1227 passed, 31 skipped` / `612 /612` |
 | Portal suite | `pytest -q` | 0 failures |
 | Invariant plants | I2 and I5 per Section 6.1 | each observed red, reverted with a sha256 receipt |
 | Parity | Section 6.3 | **N/A at M2** — needs M3's ingest; recorded, not claimed |
 | Clean-machine reproducibility | fresh clone, `doctor` then AC9 | rc 0 (`doctor` exists here for the first time) |
 | Leak test | Section 0.3 command | no unlabelled hits |
 | Exit-code hygiene | every cited code from its own command | asserted in the harness, not in prose |
+
+The export-lane row used to name one variable, and this plan was run literally
+against it: `AUTORATE_TRACKED_FILES` alone leaves the corpus in view, so the
+suite executes a different lane and reports `1256 passed, 7 skipped`. The
+`1227 passed, 31 skipped` reading belongs to the run where
+`AUTORATE_FEISHU_ROOT=/nonexistent` removes the corpus, and it reproduces
+to the test once both variables are set.
+Corrected here rather than annotated below the table, per Section 8.3.
 
 ## 7. Out of scope, named so silence is not read as done
 
