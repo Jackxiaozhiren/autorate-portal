@@ -17,11 +17,10 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import auth, db
-from .ingest import (STATE_INDEXED, ingest as ingest_bundle, load_stored, packet_store)
+from .ingest import ingest as ingest_bundle, load_stored, packet_store
 from .manifest import sha256_bytes
 from .views import certificate_panel, slice_view
 
