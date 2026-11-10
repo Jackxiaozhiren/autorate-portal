@@ -31,17 +31,7 @@ from autorate_portal.ingest import ingest, summary_fields  # noqa: E402
 from autorate_portal.packet import build  # noqa: E402
 from autorate_portal.views import packet_header  # noqa: E402
 
-#: Every committed certificate the frozen repository publishes. Literal on
-#: purpose (Section 6.3).
-ARTEFACTS = (
-    "data/cert_jev.json",
-    "data/cert_laya.json",
-    "data/cert_massive_de_laya.json",
-    "data/cert_massive_en_laya.json",
-    "data/cert_massive_km_laya.json",
-    "data/cert_massive_sw_laya.json",
-    "data/cert_severity_ordinal.json",
-)
+from autorate_portal.fixtures import ARTEFACTS  # noqa: E402  (Section 6.3, literal)
 
 EXPECTED_REDERIVED = "612 /612"
 REDERIVED = re.compile(r"re-derived\s+([0-9]+ /[0-9]+)\s+values")

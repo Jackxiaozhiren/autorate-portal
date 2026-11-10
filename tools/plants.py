@@ -197,6 +197,37 @@ PLANTS: tuple[Plant, ...] = (
           "import json\nimport subprocess  # a second executor must be caught by the static rule\n"
           "from dataclasses import dataclass, field",
           "tests/test_only_engine_executes.py::test_only_one_module_can_spawn_a_process"),
+    Plant("i1-summary-computes-a-bound", "db.py",
+          "    unknown = sorted(set(fields) - set(SUMMARY_FIELDS))",
+          "    fields = {**fields, \"bound\": str(sum(float(v) for v in fields.values() "
+          "if isinstance(v, str) and v.replace('.', '', 1).isdigit()) or 0)}\n"
+          "    unknown = sorted(set(fields) - set(SUMMARY_FIELDS))",
+          "tests/test_db.py::test_no_module_in_the_package_computes_an_aggregate"),
+    Plant("i3-refusal-renders-a-zero", "views.py",
+          "        return Panel(title, REFUSAL, reason, '<p class=\"reason\">%s</p>' % e(reason))",
+          "        return Panel(title, REFUSAL, reason, '<p class=\"reason\">%s</p><p>0</p>' % e(reason))",
+          "tests/test_views_f2.py::test_ac2_a_refusal_prints_the_reason_verbatim_and_no_number_at_all"),
+    Plant("i2-bound-unit-dropped", "emit.py",
+          '        "bound_unit": None if _absent(bound_unit) else str(bound_unit),',
+          '        "bound_unit": None,',
+          "tests/test_views_f2.py::test_ac3_a_number_carries_denominator_budget_packet_and_unit_in_one_component"),
+    Plant("f1-tampered-bytes-accepted", "packet.py",
+          "        if actual != artefact.sha256:",
+          "        if False and actual != artefact.sha256:",
+          "tests/test_ingest.py::test_one_tampered_byte_is_a_named_refusal_and_nothing_is_indexed"),
+    Plant("f3-truncation-silent", "views.py",
+          "    return ordered[:cap], len(rows) - cap",
+          "    return ordered[:cap], 0",
+          "tests/test_views_f3.py::test_an_over_cap_slice_list_keeps_the_smallest_ns_and_counts_the_rest"),
+    Plant("ac13-viewer-reads-records", "app.py",
+          '        if artifact.kind != "protocol":',
+          '        if False and artifact.kind != "protocol":',
+          "tests/test_api.py::test_ac13_a_viewer_reading_records_is_refused_and_named_in_the_audit"),
+    Plant("parity-fixture-list-becomes-a-glob", "fixtures.py",
+          "ARTEFACTS: tuple[str, ...] = tuple(_NAMES)",
+          "ARTEFACTS: tuple[str, ...] = tuple(sorted(str(p) for p in "
+          "__import__('pathlib').Path('data').glob('cert_*.json')))",
+          "tests/test_parity.py::test_an_absent_fixture_is_named_and_the_run_fails"),
 )
 
 
