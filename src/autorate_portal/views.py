@@ -14,7 +14,7 @@ Three rules shape this module more than the layout does.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from . import db
