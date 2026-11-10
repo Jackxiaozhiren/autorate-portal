@@ -11,7 +11,7 @@ from autorate_portal import db
 from autorate_portal.ingest import (BADGE_UNVERIFIED, STATE_INCONSISTENT, STATE_REFUSED,
                                     ingest)
 from autorate_portal.manifest import sha256_bytes
-from conftest import reseal_manifest, rewrite_bundle, split_bundle, tamper_bundle
+from conftest import flip_one_byte, reseal_manifest, rewrite_bundle, split_bundle
 
 REGISTRY_VERSION = "0.1.2"
 
@@ -73,7 +73,7 @@ def test_a_valid_bundle_is_indexed_with_artefacts_and_copied_summaries(built, tm
 def test_one_tampered_byte_is_a_named_refusal_and_nothing_is_indexed(built, tmp_path):
     session = _session()
     packet, manifest, _ = built
-    tamper_bundle(packet, "data/cert_laya.json", b"tampered")
+    expected, actual = flip_one_byte(packet, "data/cert_laya.json")
 
     result = ingest(session, bundle_path=packet, project_id="prj-1", actor="producer@example.test",
                     registry_path=_registry(tmp_path, manifest.distribution.sha256),
@@ -83,7 +83,12 @@ def test_one_tampered_byte_is_a_named_refusal_and_nothing_is_indexed(built, tmp_
     assert result.refusals, "a refusal names what it refused"
     refusal = result.refusals[0]
     assert refusal.path == "data/cert_laya.json"
+    assert refusal.expected == expected and refusal.actual == actual
     assert refusal.expected and refusal.actual and refusal.expected != refusal.actual
+    # The declared byte count is still true here, so a refusal that survives on the
+    # digest alone is the one this test is named for. Pinning the reason keeps a
+    # byte-count refusal from standing in for it.
+    assert "do not match the manifest" in refusal.reason
     assert _counts(session) == (0, 0, 0)
     audit = list(session.scalars(select(db.AuditRow)))
     assert audit and audit[0].outcome == "denied" and audit[0].actor == "producer@example.test"

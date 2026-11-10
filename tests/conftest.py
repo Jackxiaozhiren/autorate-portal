@@ -114,6 +114,26 @@ def tamper_bundle(path: Path, target: str, replacement: bytes) -> tuple[str, str
     return old, sha256_bytes(replacement)
 
 
+def flip_one_byte(path: Path, target: str) -> tuple[str, str]:
+    """Flip a single byte in place, keeping the length: only the hash can catch this.
+
+    ``tamper_bundle`` substitutes a different-length payload, so the manifest's
+    byte-count check also fires and a suite could stay green with the hash
+    comparison removed. This fixture leaves the declared byte count true, which
+    makes the digest the only thing standing between the bytes and acceptance.
+    """
+    document, files = split_bundle(path)
+    declared = next(a for a in document["artifacts"] if a["path"] == target)
+    old = declared["sha256"]
+    data = bytearray(files[target])
+    assert data, "an empty artefact has no byte to flip"
+    data[0] ^= 0xFF
+    files[target] = bytes(data)
+    rewrite_bundle(path, files, json.dumps(document, sort_keys=True,
+                                           separators=(",", ":")).encode())
+    return old, sha256_bytes(bytes(data))
+
+
 def resign_bundle(path: Path, patches: dict[str, bytes], manifest_patch=None) -> dict:
     """Patch artefacts and reseal the manifest so integrity checks still pass."""
     document, files = split_bundle(path)
