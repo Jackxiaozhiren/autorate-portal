@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import datetime, timedelta
 
 from autorate_portal import EXIT_NOT_RUN, EXIT_OK, EXIT_REFUSED
 from autorate_portal.engine import append_row, find_row, read_rows, run
@@ -180,6 +181,38 @@ def test_a_different_observation_is_a_second_row(built, tmp_path):
     assert [row["state"] for row in read_rows(store)] == ["certified", "mismatch"]
     assert find_row(store, certified.run_id)["state"] == "certified"
     assert find_row(store, mismatch.run_id)["state"] == "mismatch"
+
+
+def test_i5_every_attempt_records_when_it_started(built, tmp_path):
+    """Section 4.3's run row carries ``started_at``; M2 shipped the row without it.
+
+    The stamp is taken at the top of the attempt, so a refusal carries it too:
+    a series of observations whose order cannot be recovered is not a series.
+    """
+    packet = built[0]
+    _pin_packet_to_the_test_wheel(packet)
+    registry = _registry(tmp_path, sha256_bytes(WHEEL_BYTES))
+    store = tmp_path / "runs.jsonl"
+    env, _ = _env()
+
+    first = run(packet, backend="container", registry_path=registry, env=env, store_path=store)
+    second = run(packet, backend="container", registry_path=registry, env=env, store_path=store)
+
+    for row in (first, second):
+        assert row.started_at, "every attempt is stamped, not only the ones that ran"
+        assert datetime.fromisoformat(row.started_at).utcoffset() == timedelta(0), "UTC"
+    assert first.started_at != second.started_at
+    assert [row["started_at"] for row in read_rows(store)] == [first.started_at, second.started_at]
+
+
+def test_a_refused_attempt_is_stamped_before_the_engine_decides(built, tmp_path):
+    tamper_bundle(built[0], "data/cert_laya.json", b"tampered")
+    registry = _registry(tmp_path, sha256_bytes(WHEEL_BYTES))
+
+    row = run(built[0], backend="container", registry_path=registry)
+
+    assert row.state == "refused"
+    assert datetime.fromisoformat(row.started_at).utcoffset() == timedelta(0)
 
 
 def test_a_malformed_store_is_named_not_silently_skipped(tmp_path):

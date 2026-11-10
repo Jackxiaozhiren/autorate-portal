@@ -14,6 +14,11 @@ output, so an identity keyed on "the same observation" would have deduplicated
 nothing while claiming to. A monitor's re-runs are a series of observations, not
 duplicates of one, so the store is append-only and the id names the attempt.
 
+``started_at`` is recorded on every attempt, refusals included, because a series
+whose order cannot be recovered is not a series. It is metadata about the
+observation, not part of its identity: adding a clock to the id would make the
+same observation hash differently on every replay while proving nothing.
+
 States (Section 5.11, AC4):
 
 ``certified``  replay ran and reproduced the packet's stored denominator
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +61,7 @@ class RunRow:
     argv: list[str]
     command: list[str]
     exit_code: int | None
+    started_at: str
     stdout_sha256: str
     state: str
     rc: int
@@ -76,6 +83,7 @@ class RunRow:
             "argv": list(self.argv),
             "command": list(self.command),
             "exit_code": self.exit_code,
+            "started_at": self.started_at,
             "stdout_sha256": self.stdout_sha256,
             "state": self.state,
             "rc": self.rc,
@@ -120,7 +128,8 @@ def classify(outcome) -> str:
 
 
 def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
-         argv: list[str], command: list[str], exit_code: int | None, stdout_sha256: str,
+         argv: list[str], command: list[str], exit_code: int | None, started_at: str,
+         stdout_sha256: str,
          state: str, reason: str, digest_stored: str, digest_replayed: str,
          denominator_stored: str, denominator_replayed: str, image: str = "",
          refusals: list[Refusal] | None = None) -> RunRow:
@@ -135,7 +144,8 @@ def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
         run_id=run_id_for(observation),
         packet_id=packet_id, backend=backend, image=image, distribution=distribution,
         wheel_sha256=wheel_sha256, argv=list(argv), command=list(command),
-        exit_code=exit_code, stdout_sha256=stdout_sha256, state=state,
+        exit_code=exit_code, started_at=started_at, stdout_sha256=stdout_sha256,
+        state=state,
         rc=STATE_RC[state], reason=reason, digest_stored=digest_stored,
         digest_replayed=digest_replayed, denominator_stored=denominator_stored,
         denominator_replayed=denominator_replayed, refusals=list(refusals or []))
@@ -146,10 +156,12 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
         image: str = "python:3.13-slim") -> RunRow:
     """Execute one replay job and, if a store is given, record it."""
     packet = Path(packet_path)
+    started_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
     verification = verify_bundle(packet)
     if not verification.ok or verification.manifest is None:
         row = _row(packet_id="", backend=backend, distribution="", wheel_sha256="",
-                   argv=[], command=[], exit_code=None, stdout_sha256="",
+                   argv=[], command=[], exit_code=None, started_at=started_at,
+                   stdout_sha256="",
                    state="refused",
                    reason="packet integrity check failed; nothing was replayed",
                    digest_stored="", digest_replayed="", denominator_stored="",
@@ -163,7 +175,7 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
     if problems:
         row = _row(packet_id=manifest.packet_id, backend=backend, distribution=pinned,
                    wheel_sha256=manifest.distribution.sha256, argv=[], command=[],
-                   exit_code=None, stdout_sha256="", state="not-run",
+                   exit_code=None, started_at=started_at, stdout_sha256="", state="not-run",
                    reason="pinned-distribution registry unusable: %s" % describe(problems),
                    digest_stored=manifest.manifest_sha256, digest_replayed="",
                    denominator_stored=manifest.expected_rederived, denominator_replayed="",
@@ -176,7 +188,7 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
     if problems:
         row = _row(packet_id=manifest.packet_id, backend=backend, distribution=pinned,
                    wheel_sha256=manifest.distribution.sha256, argv=[], command=[],
-                   exit_code=None, stdout_sha256="", state="refused",
+                   exit_code=None, started_at=started_at, stdout_sha256="", state="refused",
                    reason="packet pin rejected by the registry: %s" % describe(problems),
                    digest_stored=manifest.manifest_sha256, digest_replayed="",
                    denominator_stored=manifest.expected_rederived, denominator_replayed="",
@@ -195,7 +207,8 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
                      manifest.manifest_sha256, outcome.stdout_sha256))
     row = _row(packet_id=manifest.packet_id, backend=backend, distribution=pin.specifier,
                wheel_sha256=pin.sha256, argv=outcome.argv, command=outcome.command,
-               exit_code=outcome.exit_code, stdout_sha256=outcome.stdout_sha256,
+               exit_code=outcome.exit_code, started_at=started_at,
+               stdout_sha256=outcome.stdout_sha256,
                state=state, reason=reason, digest_stored=manifest.manifest_sha256,
                digest_replayed=outcome.stdout_sha256,
                denominator_stored=manifest.expected_rederived,
