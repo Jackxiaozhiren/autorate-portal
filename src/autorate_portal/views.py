@@ -168,3 +168,12 @@ def _cap(rows: list[dict[str, Any]], cap: int) -> tuple[list[dict[str, Any]], in
         return rows, 0
     ordered = sorted(rows, key=lambda row: (row.get("n") is None, row.get("n") or 0))
     return ordered[:cap], len(rows) - cap
+
+
+def packet_header(manifest) -> dict[str, str]:
+    """The line the portal quotes above a certificate, including the re-derived
+    denominator the artefact's own verify printed. Section 6.3 compares this
+    quoted string against a live run in the same job."""
+    return {"packet_id": manifest.packet_id, "protocol_digest": manifest.protocol_digest,
+            "source_revision": manifest.source_revision,
+            "re_derived": manifest.expected_rederived}

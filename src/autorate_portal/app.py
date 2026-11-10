@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from . import auth, db
 from .ingest import ingest as ingest_bundle, load_stored, packet_store
 from .manifest import sha256_bytes
-from .views import certificate_panel, slice_view
+from .views import certificate_panel, packet_header, slice_view
 
 WEB_DIR = Path(__file__).parent / "web"
 DEFAULT_SALT = "autorate-portal-salt"
@@ -111,11 +111,15 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     def read_packet(packet_id: str, session: Session = Depends(session_dependency),
                     who: auth.Principal = Depends(principal)) -> dict:
         packet = _packet_for(session, who, packet_id)
-        return {"id": packet.id, "manifest_sha256": packet.manifest_sha256,
+        body = {"id": packet.id, "manifest_sha256": packet.manifest_sha256,
                 "protocol_digest": packet.protocol_digest,
                 "source_version": packet.source_version,
                 "source_revision": packet.source_revision,
                 "ingested_at": packet.ingested_at, "bytes": packet.bytes}
+        stored = load_stored(app.state.store_dir, packet.manifest_sha256)
+        if stored is not None and stored.ok:
+            body.update(packet_header(stored.manifest))
+        return body
 
     @app.get("/api/v1/packets/{packet_id}/artifacts/{artifact_id}")
     def download(packet_id: str, artifact_id: str, session: Session = Depends(session_dependency),

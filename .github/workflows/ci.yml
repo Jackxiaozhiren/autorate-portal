@@ -196,3 +196,25 @@ jobs:
           path: packets/
           if-no-files-found: error
           include-hidden-files: true
+
+  parity:
+    name: parity 6.3 / committed artefacts render byte-equal
+    runs-on: ubuntu-latest
+    needs: suite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - run: uv sync --frozen --extra dev
+
+      - name: Clone the pinned frozen revision
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v0.1.2 https://github.com/Jackxiaozhiren/autorate.git "$RUNNER_TEMP/frozen"
+          REV=$(git -C "$RUNNER_TEMP/frozen" rev-parse HEAD)
+          echo "pinned revision: $REV"
+          test "$REV" = e9b0cf179175ab59da506115c54101eaf8f44389
+
+      - name: Section 6.3 parity against the committed artefacts
+        run: uv run --frozen --extra dev python tools/parity.py --frozen "$RUNNER_TEMP/frozen"
