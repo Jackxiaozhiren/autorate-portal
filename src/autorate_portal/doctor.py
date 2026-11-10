@@ -111,34 +111,6 @@ def _database(url: str | None = None) -> Check:
     return Check("database", "ok", "%s; reachable" % _redact(target))
 
 
-def _version(registry_path: Path | None) -> Check:
-    """Section 4.6: the portal's version and the pinned autorate version."""
-    registry, problems = load_registry(registry_path)
-    pinned = ("unresolved: %s" % "; ".join(problem.reason for problem in problems)
-              if problems else ", ".join(pin.specifier for pin in registry))
-    return Check("version", "ok", "portal %s; pinned autorate %s" % (__version__, pinned))
-
-
-def _redact(url: str) -> str:
-    if "://" not in url or "@" not in url:
-        return url
-    scheme, rest = url.split("://", 1)
-    credentials, host = rest.rsplit("@", 1)
-    user = credentials.split(":", 1)[0]
-    return "%s://%s:***@%s" % (scheme, user, host)
-
-
-def _database(url: str | None = None) -> Check:
-    target = url or db.database_url()
-    try:
-        engine = db.make_engine(target)
-        with engine.connect() as connection:
-            connection.execute(text("select 1"))
-    except Exception as exc:  # noqa: BLE001 - a doctor reports, it never raises
-        return Check("database", "fail", "%s: %s" % (_redact(target), exc))
-    return Check("database", "ok", "%s; reachable" % _redact(target))
-
-
 def _packet(packet_path: Path | None) -> Check:
     if packet_path is None:
         return Check("packet", "not-required", "no packet was given")

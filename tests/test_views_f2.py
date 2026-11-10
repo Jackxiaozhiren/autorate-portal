@@ -42,13 +42,20 @@ def test_ac3_a_number_carries_denominator_budget_packet_and_unit_in_one_componen
     panel = _panel()
 
     assert panel.state == CERTIFIED
-    card = panel.body.split('class="card"', 1)[1]
-    assert "0.812" in card
-    assert "n_cal=600 n_eval=600" in card
-    assert "alpha=0.05 beta=0.05 delta=0.05 method=aps seed=7" in card
-    assert "pkt-row-1 / abcdef123456" in card
-    assert "bound_unit: case" in card
-    assert "</div>" in card.split("triple", 1)[1], "the triple lives inside the same card"
+    cards = [card.split("</p></div>", 1)[0]
+             for card in panel.body.split('<div class="card">')[1:]]
+    assert len(cards) == len(panel.numbers) >= 1, "one card per number, no number outside a card"
+    for card in cards:
+        for component in ("denominator:", "budget/rubric:", "packet:", "bound_unit:"):
+            assert component in card, "%s is not in the same component as its number" % component
+        assert "<code>" in card, "a card without a number is not a statistic"
+
+    autorate = next(card for card in cards if "autorate" in card)
+    assert "0.812" in autorate
+    assert "n_cal=600 n_eval=600" in autorate
+    assert "alpha=0.05 beta=0.05 delta=0.05 method=aps seed=7" in autorate
+    assert "pkt-row-1 / abcdef123456" in autorate
+    assert "bound_unit: case" in autorate
 
 
 def test_a_field_the_artefact_omits_reads_as_not_published_not_as_zero():

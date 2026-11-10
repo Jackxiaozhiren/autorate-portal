@@ -95,3 +95,65 @@ def test_a_correction_is_displayed_when_published_and_never_computed():
 
     assert "bonferroni over 3 slices" in published["html"]
     assert "correction" not in silent["html"]
+
+
+def _slices_artefact(**patches):
+    """The shape `data/slices_language.json` actually publishes (run.per_group)."""
+    groups = {}
+    for name, n in (("de", 1487), ("en", 1512), ("km", 402), ("sw", 388)):
+        groups[name] = {"n_cal": n, "n_eval": n, "feasible": False, "autorate": None,
+                        "reason": "empty_feasible_set",
+                        "envelope": ["no certificate exists, so no action is certified"],
+                        "meta": {"alpha": 0.0125, "beta": 0.05}}
+    groups.update(patches)
+    return {"group_key": "language", "run": {"groups": ["language"], "per_group": groups}}
+
+
+def test_a_published_slices_artefact_is_read_from_run_per_group():
+    view = slice_view(pooled=_pooled(), companion=_companion(), document=_slices_artefact())
+
+    assert 'data-state="refusal"' in view["html"]
+    for name, n in (("de", 1487), ("en", 1512), ("km", 402), ("sw", 388)):
+        assert "language: %s" % name in view["html"]
+        assert "n_cal=%d n_eval=%d" % (n, n) in view["html"]
+    assert view["html"].count("empty_feasible_set") == 4, "each group keeps its own reason"
+    assert "0.0125" not in view["html"], "a refused group publishes no number to show"
+
+
+def test_a_group_that_refuses_carries_its_reason_and_no_number():
+    row_html = slice_view(pooled=_pooled(), companion=_companion(),
+                          document=_slices_artefact())["html"]
+
+    assert '<p class="reason">empty_feasible_set</p>' in row_html
+    assert "no certificate exists" not in row_html, "the envelope is not the reason"
+
+
+def test_a_group_that_publishes_a_bound_goes_through_emit_and_refuses_without_a_unit():
+    artefact = _slices_artefact(de={"n_cal": 100, "n_eval": 100, "feasible": True,
+                                    "autorate": "0.310000", "reason": None,
+                                    "meta": {"alpha": 0.05, "beta": 0.05}})
+
+    without_context = slice_view(pooled=_pooled(), companion=_companion(),
+                                 document=artefact)["html"]
+    assert "unavailable: budget/rubric" in without_context
+    assert "0.310000" not in without_context, "a bound without its triple is not a claim"
+
+    without_unit = slice_view(pooled=_pooled(), companion=_companion(), document=artefact,
+                              context={"rubric": {"alpha": "0.05", "beta": "0.05", "delta": "0.05",
+                                                  "method": "aps", "seed": "7"},
+                                       "packet_id": "pkt-row-1",
+                                       "protocol_digest": "abcdef123456",
+                                       "bound_unit": None})["html"]
+    assert "unavailable: bound_unit" in without_unit
+    assert "0.310000" not in without_unit, "a bound without its unit is not a claim"
+
+    with_context = slice_view(pooled=_pooled(), companion=_companion(), document=artefact,
+                              context={"rubric": {"alpha": "0.05", "beta": "0.05", "delta": "0.05",
+                                                  "method": "aps", "seed": "7"},
+                                       "packet_id": "pkt-row-1",
+                                       "protocol_digest": "abcdef123456",
+                                       "bound_unit": "case"})["html"]
+    assert "0.310000" in with_context
+    assert "pkt-row-1 / abcdef123456" in with_context
+    assert "bound_unit: case" in with_context
+    assert "n_cal=100 n_eval=100" in with_context

@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from . import auth, db
 from .ingest import ingest as ingest_bundle, load_stored, packet_store
 from .manifest import sha256_bytes
-from .views import certificate_panel, packet_header, slice_view
+from .views import certificate_panel, packet_header, slice_context, slice_view
 
 WEB_DIR = Path(__file__).parent / "web"
 DEFAULT_SALT = "autorate-portal-salt"
@@ -169,7 +169,8 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         document = json.loads(stored.files[artifact.path].decode("utf-8"), parse_float=str)
         panel = certificate_panel(summary=summary, packet=packet, rubric=stored.manifest.rubric,
                                   certificate=document)
-        view = slice_view(pooled=panel, companion=None, document=document)
+        view = slice_view(pooled=panel, companion=None, document=document,
+                          context=slice_context(stored.manifest, document))
         return {"certificate": panel.title, "state": panel.state, "reason": panel.reason,
                 "html": view["html"], "notes": list(view["notes"])}
 

@@ -8,12 +8,17 @@ from autorate_portal.views import packet_header
 
 
 def test_an_absent_fixture_is_named_and_the_run_fails(tmp_path, capsys):
+    named = parity.check_fixtures(tmp_path)
+    assert len(named) == 8, "the literal list names eight artefacts, whatever the tree holds"
+    assert "data/cert_laya.json" in named, "a certificate is named, not inferred from a glob"
+    assert "data/slices_language.json" in named, "the slices artefact is named too"
+
     code = parity.main(["--frozen", str(tmp_path)])
 
     printed = capsys.readouterr().out
     assert code == 1
-    assert "PARITY FIXTURES=%d" % len(parity.ARTEFACTS) in printed
-    for name in parity.ARTEFACTS:
+    assert "PARITY FIXTURES=%d" % len(parity.ALL_ARTEFACTS) in printed
+    for name in parity.ALL_ARTEFACTS:
         assert "PARITY MISSING %s" % name in printed
     assert "PARITY FAIL" in printed
 
@@ -23,6 +28,27 @@ def test_the_fixture_list_is_a_literal_and_covers_every_committed_certificate():
     assert all("*" not in name and name.startswith("data/cert_") for name in parity.ARTEFACTS)
     assert len(parity.ARTEFACTS) == 7
     assert len(set(parity.ARTEFACTS)) == 7
+    assert parity.SLICE_ARTEFACTS == ("data/slices_language.json",)
+
+
+def test_the_quoted_denominator_is_read_from_the_published_readme(tmp_path):
+    (tmp_path / "README.md").write_text("a stranger reproduces `re-derived 612 /612 values`\n",
+                                        encoding="utf-8")
+
+    assert parity.published_denominator(tmp_path) == "612 /612"
+
+
+def test_a_slices_artefact_renders_every_group_with_its_own_denominator():
+    document = {"group_key": "language",
+                "run": {"groups": ["language"],
+                        "per_group": {"de": {"n_cal": 1487, "n_eval": 1487, "feasible": False,
+                                             "reason": "empty_feasible_set"},
+                                      "km": {"n_cal": 402, "n_eval": 402, "feasible": False,
+                                             "reason": "empty_feasible_set"}}}}
+
+    total, refused, problems = parity.slice_report(document)
+
+    assert (total, refused, problems) == (2, 2, [])
 
 
 def test_values_are_compared_as_the_artefact_wrote_them(tmp_path):

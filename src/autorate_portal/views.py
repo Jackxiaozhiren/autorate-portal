@@ -105,10 +105,63 @@ def certificate_panel(*, summary: db.CertificateSummary, packet: db.Packet,
     return Panel(title, CERTIFIED, "", "".join(chunks), tuple(numbers))
 
 
+def slice_rows(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """F3 rule 2: the rows the artefact itself declares.
+
+    Two published shapes exist in the frozen repository. The fixtures and the
+    PRD's rule 2 describe an explicit ``slices`` array; the slices artefact
+    publishes ``run.per_group`` keyed by ``group_key`` instead, with a per-group
+    ``feasible``/``reason``/``envelope``. Reading only the first shape made a
+    real artefact look as if it had published no slices at all, which is the
+    opposite of what it says - so both are read, and neither is inferred.
+    """
+    declared = document.get("slices")
+    if declared:
+        return [dict(row) for row in declared]
+
+    run = document.get("run") or {}
+    per_group = run.get("per_group") or {}
+    if not per_group:
+        return []
+
+    key = document.get("group_key") or (run.get("groups") or ["group"])[0]
+    rows: list[dict[str, Any]] = []
+    for name, group in per_group.items():
+        group = group or {}
+        n_cal, n_eval = group.get("n_cal"), group.get("n_eval")
+        rows.append({"key": key, "value": name,
+                     "n": n_eval if n_eval is not None else n_cal,
+                     "n_cal": n_cal, "n_eval": n_eval,
+                     "feasible": group.get("feasible"),
+                     "reason": group.get("reason"),
+                     "envelope": group.get("envelope") or [],
+                     "bound": group.get("autorate"),
+                     "bound_unit": (group.get("meta") or {}).get("bound_unit")})
+    return rows
+
+
+def slice_context(manifest, document: dict[str, Any]) -> dict[str, Any]:
+    """The certificate-level half of a slice row's triple.
+
+    The denominator is the slice's own; the budget, the packet id and the
+    protocol digest are properties of the certificate the slice came from, so
+    they are read once and carried into every row instead of being invented per
+    group.
+    """
+    meta = document.get("meta") or {}
+    at_alpha = meta.get("at_requested_alpha") or {}
+    unit = at_alpha.get("bound_unit")
+    if unit in (None, ""):
+        unit = meta.get("bound_unit")
+    return {"rubric": manifest.rubric, "packet_id": manifest.packet_id,
+            "protocol_digest": manifest.protocol_digest, "bound_unit": unit}
+
+
 def slice_view(*, pooled: Panel, companion: Panel | None,
-               document: dict[str, Any], cap: int = SLICE_CAP) -> dict[str, Any]:
+               document: dict[str, Any], cap: int = SLICE_CAP,
+               context: dict[str, Any] | None = None) -> dict[str, Any]:
     """F3: pooled and companion side by side, every number with its own n."""
-    rows = document.get("slices") or []
+    rows = slice_rows(document)
     notes: list[str] = []
     body: list[str] = []
 
@@ -123,7 +176,7 @@ def slice_view(*, pooled: Panel, companion: Panel | None,
 
     kept, overflow = _cap(kept, cap)
     for row in kept:
-        body.append(_slice_row(row))
+        body.append(_slice_row(row, context))
     if overflow:
         notes.append("and %d more" % overflow)
         body.append('<p class="note">and %d more</p>' % overflow)
@@ -146,12 +199,43 @@ def slice_view(*, pooled: Panel, companion: Panel | None,
         "excluded": tuple(excluded), "overflow": overflow}
 
 
-def _slice_row(row: dict[str, Any]) -> str:
+def _slice_row(row: dict[str, Any], context: dict[str, Any] | None = None) -> str:
+    """One slice: its own denominator, its own verdict.
+
+    A group that the artefact itself refuses keeps its reason verbatim and gets
+    no number (F3 rule 3 is F2's AC2 applied per group). A group that publishes
+    a bound goes through :func:`emit.statistic` like every other number, so a
+    missing unit renders "unavailable: bound_unit" rather than a bare figure.
+    """
+    key = row.get("key")
     denominator = ("n_cal=%s n_eval=%s" % (row.get("n_cal"), row.get("n_eval"))
                    if row.get("n_cal") is not None and row.get("n_eval") is not None
                    else "unavailable: denominator")
+
+    if row.get("feasible") is False:
+        envelope = row.get("envelope") or []
+        reason = row.get("reason") or (envelope[0] if envelope else None) or "reason not published by this artefact"
+        return ('<div class="slice" data-state="refusal"><p>%s: %s</p>'
+                '<p class="reason">%s</p><p class="triple">%s</p></div>'
+                % (e(key), e(row.get("value")), e(reason), e(denominator)))
+
+    if row.get("bound") is not None:
+        context = context or {}
+        values = components_for(n_cal=row.get("n_cal"), n_eval=row.get("n_eval"),
+                                rubric=context.get("rubric"),
+                                packet_id=context.get("packet_id") or "",
+                                protocol_digest=context.get("protocol_digest") or "",
+                                bound_unit=row.get("bound_unit") or context.get("bound_unit"))
+        label = "%s=%s" % (key, row.get("value"))
+        try:
+            return statistic(label=label, value=row.get("bound"), values=values)
+        except EmitRefused as exc:
+            return ('<div class="slice" data-state="unavailable"><p>%s: %s</p>'
+                    '<p class="absent">unavailable: %s</p><p class="triple">%s</p></div>'
+                    % (e(key), e(row.get("value")), e(", ".join(exc.missing)), e(denominator)))
+
     return ('<div class="slice"><p>%s: %s</p><p class="triple">%s</p></div>'
-            % (e(row.get("key")), e(row.get("value")), e(denominator)))
+            % (e(key), e(row.get("value")), e(denominator)))
 
 
 def _exclude_degenerate(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:

@@ -15,4 +15,8 @@ _NAMES = (
     "data/cert_severity_ordinal.json",
 )
 
+_SLICE_NAMES = ("data/slices_language.json",)
+
 ARTEFACTS: tuple[str, ...] = tuple(_NAMES)
+SLICE_ARTEFACTS: tuple[str, ...] = tuple(_SLICE_NAMES)
+ALL_ARTEFACTS: tuple[str, ...] = ARTEFACTS + SLICE_ARTEFACTS

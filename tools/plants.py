@@ -228,6 +228,14 @@ PLANTS: tuple[Plant, ...] = (
           "ARTEFACTS: tuple[str, ...] = tuple(sorted(str(p) for p in "
           "__import__('pathlib').Path('data').glob('cert_*.json')))",
           "tests/test_parity.py::test_an_absent_fixture_is_named_and_the_run_fails"),
+    Plant("f3-per-group-shape-ignored", "views.py",
+          '    per_group = run.get("per_group") or {}',
+          "    per_group = {}",
+          "tests/test_views_f3.py::test_a_published_slices_artefact_is_read_from_run_per_group"),
+    Plant("f3-a-refused-group-renders-a-label", "views.py",
+          '    if row.get("feasible") is False:',
+          "    if False and row.get(\"feasible\") is False:",
+          "tests/test_views_f3.py::test_a_group_that_refuses_carries_its_reason_and_no_number"),
 )
 
 

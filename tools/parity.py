@@ -29,9 +29,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from autorate_portal import db  # noqa: E402
 from autorate_portal.ingest import ingest, summary_fields  # noqa: E402
 from autorate_portal.packet import build  # noqa: E402
-from autorate_portal.views import packet_header  # noqa: E402
+from autorate_portal.views import Panel, packet_header, slice_rows, slice_view  # noqa: E402
 
-from autorate_portal.fixtures import ARTEFACTS  # noqa: E402  (Section 6.3, literal)
+from autorate_portal.fixtures import ALL_ARTEFACTS, ARTEFACTS, SLICE_ARTEFACTS  # noqa: E402
 
 EXPECTED_REDERIVED = "612 /612"
 REDERIVED = re.compile(r"re-derived\s+([0-9]+ /[0-9]+)\s+values")
@@ -44,7 +44,45 @@ COMPARED = ("feasible", "reason", "autorate", "bound", "bound_unit", "n_cal", "n
 
 def check_fixtures(frozen: Path) -> list[str]:
     """The names that are absent, so a missing artefact cannot pass silently."""
-    return [name for name in ARTEFACTS if not (frozen / name).is_file()]
+    return [name for name in ALL_ARTEFACTS if not (frozen / name).is_file()]
+
+
+def published_denominator(frozen: Path) -> str | None:
+    """The `re-derived N /M` the frozen tree itself publishes, read from disk.
+
+    Section 6.3 asks that the line the portal quotes equal a live run in the
+    same job. Taking the expected value out of this tool's own constants makes
+    the comparison agree with itself; reading it from the committed README makes
+    a stale published number the thing that goes red.
+    """
+    readme = frozen / "README.md"
+    if not readme.is_file():
+        return None
+    found = REDERIVED.search(readme.read_text(encoding="utf-8", errors="replace"))
+    return found.group(1) if found else None
+
+
+def slice_report(document: dict) -> tuple[int, int, list[str]]:
+    """Render one slices artefact the way the portal does, and grade the result."""
+    rows = slice_rows(document)
+    html = slice_view(pooled=Panel("pooled", "certified", "", ""), companion=None,
+                      document=document)["html"]
+    problems: list[str] = []
+    refused = 0
+    for row in rows:
+        label = "%s: %s" % (row.get("key"), row.get("value"))
+        if label not in html:
+            problems.append("slice row %r is not rendered" % label)
+        if row.get("n_cal") is not None and row.get("n_eval") is not None:
+            denominator = "n_cal=%s n_eval=%s" % (row["n_cal"], row["n_eval"])
+            if denominator not in html:
+                problems.append("slice %r lost its own denominator" % label)
+        if row.get("feasible") is False:
+            refused += 1
+            reason = row.get("reason")
+            if reason and reason not in html:
+                problems.append("slice %r lost its reason %r" % (label, reason))
+    return len(rows), refused, problems
 
 
 def artefact_values(document: dict) -> dict:
@@ -99,7 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     missing = check_fixtures(args.frozen)
-    print("PARITY FIXTURES=%d" % len(ARTEFACTS))
+    published = published_denominator(args.frozen)
+    print("PARITY FIXTURES=%d" % len(ALL_ARTEFACTS))
+    print("PARITY PUBLISHED_REDERIVED=%s" % published)
     if missing:
         for name in missing:
             print("PARITY MISSING %s" % name)
@@ -107,12 +147,18 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     failures: list[str] = []
+    expected = published or EXPECTED_REDERIVED
+    if published is None:
+        failures.append("the frozen tree publishes no `re-derived N /M` line to compare against")
+    elif published != EXPECTED_REDERIVED:
+        failures.append("the published line %r is not the pinned %r" % (published, EXPECTED_REDERIVED))
+
     with tempfile.TemporaryDirectory() as work:
         work_path = Path(work)
         bundle = work_path / "parity.tar"
         manifest, _raw = build(args.frozen, bundle, source_revision=args.revision,
                                source_version="0.1.2", wheel_filename=WHEEL,
-                               wheel_sha256=WHEEL_SHA256, expected_rederived=EXPECTED_REDERIVED)
+                               wheel_sha256=WHEEL_SHA256, expected_rederived=expected)
 
         engine = db.make_engine("sqlite:///" + str(work_path / "parity.db"))
         db.create_all(engine)
@@ -132,12 +178,21 @@ def main(argv: list[str] | None = None) -> int:
         for name in ARTEFACTS:
             document = json.loads((args.frozen / name).read_text(encoding="utf-8"),
                                   parse_float=str)
-            expected = artefact_values(document)
+            artefact_expected = artefact_values(document)
             stored = summary_fields(manifest, name, (args.frozen / name).read_bytes())
-            for difference in compare_values({key: stored[key] for key in COMPARED}, expected):
+            for difference in compare_values({key: stored[key] for key in COMPARED}, artefact_expected):
                 failures.append("%s: %s" % (name, difference))
             checked += 1
         print("PARITY VALUES=%d compared" % checked)
+
+        for name in SLICE_ARTEFACTS:
+            document = json.loads((args.frozen / name).read_text(encoding="utf-8"),
+                                  parse_float=str)
+            total, refused, problems = slice_report(document)
+            print("PARITY SLICES=%s rows=%d refusals=%d" % (name, total, refused))
+            if total == 0:
+                failures.append("%s: the portal renders no slice rows for a published slices artefact" % name)
+            failures.extend("%s: %s" % (name, problem) for problem in problems)
 
     completed = subprocess.run(list(VERIFY), cwd=str(args.frozen), capture_output=True, text=True,
                                env={**os.environ, "AUTORATE_FEISHU_ROOT": "/nonexistent",
@@ -151,15 +206,15 @@ def main(argv: list[str] | None = None) -> int:
         failures.append("a live verify in this job exited %d" % completed.returncode)
     if live != quoted:
         failures.append("the quoted line %r is not the live reading %r" % (quoted, live))
-    if live != EXPECTED_REDERIVED:
-        failures.append("the live reading %r is not the pinned %r" % (live, EXPECTED_REDERIVED))
+    if live != expected:
+        failures.append("the live reading %r is not the published %r" % (live, expected))
 
     for failure in failures:
         print("PARITY MISMATCH %s" % failure)
     if failures:
         print("PARITY FAIL: %d difference(s)" % len(failures))
         return 1
-    print("PARITY OK: %d artefacts byte-equal, denominators %s" % (len(ARTEFACTS), live))
+    print("PARITY OK: %d artefacts byte-equal, denominators %s" % (len(ALL_ARTEFACTS), live))
     return 0
 
 
