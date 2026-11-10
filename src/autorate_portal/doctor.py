@@ -18,7 +18,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import EXIT_NOT_RUN, EXIT_OK
+from sqlalchemy import text
+
+from . import EXIT_NOT_RUN, EXIT_OK, __version__, db
 from .distributions import load_registry
 from .packet import verify_bundle
 from .replay import Environment, probe_container_network, probe_environment
@@ -81,6 +83,62 @@ def _registry(registry_path: Path | None) -> Check:
                  % (len(registry), ", ".join(pin.specifier for pin in registry)))
 
 
+def _version(registry_path: Path | None) -> Check:
+    """Section 4.6: the portal's version and the pinned autorate version."""
+    registry, problems = load_registry(registry_path)
+    pinned = ("unresolved: %s" % "; ".join(problem.reason for problem in problems)
+              if problems else ", ".join(pin.specifier for pin in registry))
+    return Check("version", "ok", "portal %s; pinned autorate %s" % (__version__, pinned))
+
+
+def _redact(url: str) -> str:
+    if "://" not in url or "@" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    credentials, host = rest.rsplit("@", 1)
+    user = credentials.split(":", 1)[0]
+    return "%s://%s:***@%s" % (scheme, user, host)
+
+
+def _database(url: str | None = None) -> Check:
+    target = url or db.database_url()
+    try:
+        engine = db.make_engine(target)
+        with engine.connect() as connection:
+            connection.execute(text("select 1"))
+    except Exception as exc:  # noqa: BLE001 - a doctor reports, it never raises
+        return Check("database", "fail", "%s: %s" % (_redact(target), exc))
+    return Check("database", "ok", "%s; reachable" % _redact(target))
+
+
+def _version(registry_path: Path | None) -> Check:
+    """Section 4.6: the portal's version and the pinned autorate version."""
+    registry, problems = load_registry(registry_path)
+    pinned = ("unresolved: %s" % "; ".join(problem.reason for problem in problems)
+              if problems else ", ".join(pin.specifier for pin in registry))
+    return Check("version", "ok", "portal %s; pinned autorate %s" % (__version__, pinned))
+
+
+def _redact(url: str) -> str:
+    if "://" not in url or "@" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    credentials, host = rest.rsplit("@", 1)
+    user = credentials.split(":", 1)[0]
+    return "%s://%s:***@%s" % (scheme, user, host)
+
+
+def _database(url: str | None = None) -> Check:
+    target = url or db.database_url()
+    try:
+        engine = db.make_engine(target)
+        with engine.connect() as connection:
+            connection.execute(text("select 1"))
+    except Exception as exc:  # noqa: BLE001 - a doctor reports, it never raises
+        return Check("database", "fail", "%s: %s" % (_redact(target), exc))
+    return Check("database", "ok", "%s; reachable" % _redact(target))
+
+
 def _packet(packet_path: Path | None) -> Check:
     if packet_path is None:
         return Check("packet", "not-required", "no packet was given")
@@ -93,10 +151,11 @@ def _packet(packet_path: Path | None) -> Check:
 
 def examine(*, backend: str = "container", registry_path: Path | None = None,
             packet_path: Path | None = None, env: Environment | None = None,
-            image: str = DEFAULT_IMAGE,
+            image: str = DEFAULT_IMAGE, db_url: str | None = None,
             container_probe=probe_container_network) -> list[Check]:
     environment = env or probe_environment(image=image)
-    return [_python(), _uv(backend), _docker(backend, environment),
+    return [_python(), _version(registry_path), _database(db_url), _uv(backend),
+            _docker(backend, environment),
             _container_network(backend, environment, image, container_probe),
             _pypi(environment), _registry(registry_path), _packet(packet_path)]
 

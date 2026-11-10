@@ -26,7 +26,8 @@ def _examine(**kwargs):
 def test_a_ready_machine_has_no_failing_check(built):
     checks = _examine(backend="container", packet_path=built[0], env=_env())
     assert [check.name for check in checks] == [
-        "python", "uv", "docker", "container-network", "pypi", "registry", "packet"]
+        "python", "version", "database", "uv", "docker", "container-network", "pypi",
+        "registry", "packet"]
     assert [check.name for check in checks if check.status == "fail"] == []
     assert exit_code(checks) == EXIT_OK
 
@@ -115,3 +116,30 @@ def test_the_container_probe_is_named_when_docker_itself_failed():
     checks = _examine(backend="container", env=_env(docker=False))
     assert _check(checks, "container-network").status == "not-required"
     assert _check(checks, "docker").status == "fail"
+
+
+def test_the_version_row_names_the_pinned_distribution():
+    checks = _examine(backend="uv", env=_env())
+    version = _check(checks, "version")
+    assert version.status == "ok"
+    assert "portal" in version.detail and "autorate==0.1.2" in version.detail
+
+
+def test_a_reachable_database_is_ok(tmp_path):
+    checks = _examine(backend="uv", env=_env(), db_url="sqlite:///" + str(tmp_path / "p.db"))
+    assert _check(checks, "database").status == "ok"
+
+
+def test_an_unreachable_database_fails_the_check_and_exits_not_run(tmp_path):
+    checks = _examine(backend="uv", env=_env(),
+                      db_url="sqlite:///" + str(tmp_path / "missing" / "x.db"))
+    database = _check(checks, "database")
+    assert database.status == "fail" and database.detail
+    assert exit_code(checks) == EXIT_NOT_RUN
+
+
+def test_a_password_in_the_database_url_is_not_printed():
+    checks = _examine(backend="uv", env=_env(),
+                      db_url="postgresql://user:hunter2@127.0.0.1:9/none")
+    detail = _check(checks, "database").detail
+    assert "hunter2" not in detail and "***" in detail
