@@ -23,6 +23,7 @@ Three deliberate readings, all recorded in the milestone report:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,9 @@ from .auth import record_audit
 from .distributions import load_registry, resolve
 from .manifest import Manifest, canonical_bytes, sha256_bytes
 from .packet import MAX_BUNDLE_BYTES, Refusal, verify_bundle
+
+PACKET_STORE_ENV = "AUTHORATE_PACKET_STORE"
+DEFAULT_STORE = "packets"
 
 STATE_INDEXED = "indexed"
 STATE_REFUSED = "refused"
@@ -157,9 +161,39 @@ def provenance(manifest: Manifest, files: dict[str, bytes],
     return "", ""
 
 
+def packet_store(store_dir: Path | None = None) -> Path:
+    """Section 4.6's packet store: the bundle the views and downloads read."""
+    if store_dir is not None:
+        return Path(store_dir)
+    return Path(os.environ.get(PACKET_STORE_ENV) or DEFAULT_STORE)
+
+
+def stored_bundle(store_dir: Path, manifest_sha256: str) -> Path:
+    return packet_store(store_dir) / ("%s.tar" % manifest_sha256)
+
+
+def load_stored(store_dir: Path, manifest_sha256: str):
+    """Re-verify a stored bundle before anyone renders or serves it."""
+    target = stored_bundle(store_dir, manifest_sha256)
+    if not target.is_file():
+        return None
+    return verify_bundle(target)
+
+
+def _retain(store_dir: Path, manifest_sha256: str, raw: bytes) -> None:
+    target = packet_store(store_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    destination = stored_bundle(store_dir, manifest_sha256)
+    if destination.is_file() and sha256_bytes(destination.read_bytes()) == sha256_bytes(raw):
+        return
+    temporary = destination.with_suffix(".tar.part")
+    temporary.write_bytes(raw)
+    temporary.replace(destination)
+
+
 def ingest(session: Session, *, bundle_path: Path, project_id: str, actor: str,
            registry_path: Path | None = None, cap: int = MAX_BUNDLE_BYTES,
-           now: str | None = None) -> IngestResult:
+           store_dir: Path | None = None, now: str | None = None) -> IngestResult:
     path = Path(bundle_path)
     timestamp = now or _utc()
 
@@ -201,6 +235,7 @@ def ingest(session: Session, *, bundle_path: Path, project_id: str, actor: str,
                             note="already ingested; one row, no duplicate artefacts")
 
     badge, note = provenance(manifest, files, registry_path)
+    _retain(store_dir, manifest.manifest_sha256, path.read_bytes())
     row_id = packet_row_id(project_id, manifest)
     packet = db.Packet(
         id=row_id, project_id=project_id, manifest_sha256=manifest.manifest_sha256,

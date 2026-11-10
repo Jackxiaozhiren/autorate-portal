@@ -48,6 +48,29 @@ def _absent(value: Any) -> bool:
     return False
 
 
+def components_for(*, n_cal: Any, n_eval: Any, rubric: dict[str, Any] | None,
+                   packet_id: str, protocol_digest: str,
+                   bound_unit: Any) -> dict[str, Any]:
+    """The four components from stored values, for surfaces that read the row.
+
+    ``components`` serves the builder, which holds the parsed manifest and
+    certificate; this serves the portal, which holds the database. They must
+    format identically, because a number rendered from the row and the same
+    number rendered at build time are the same claim.
+    """
+    rubric = rubric or {}
+    budget = [rubric.get(key) for key in BUDGET_KEYS]
+    return {
+        "denominator": (None if n_cal is None or n_eval is None
+                        else "n_cal=%s n_eval=%s" % (n_cal, n_eval)),
+        "budget/rubric": (None if any(value is None for value in budget)
+                          else "alpha=%s beta=%s delta=%s method=%s seed=%s" % tuple(budget)),
+        "packet": ("%s / %s" % (packet_id, protocol_digest)
+                   if packet_id and protocol_digest else None),
+        "bound_unit": None if _absent(bound_unit) else str(bound_unit),
+    }
+
+
 def components(manifest: Manifest, certificate: dict[str, Any]) -> dict[str, Any]:
     """The four things a displayed number has to carry, formatted or None."""
     meta = certificate.get("meta") or {}
@@ -56,19 +79,9 @@ def components(manifest: Manifest, certificate: dict[str, Any]) -> dict[str, Any
     if _absent(unit):
         unit = meta.get("bound_unit")
 
-    n_cal, n_eval = certificate.get("n_cal"), certificate.get("n_eval")
-    rubric = manifest.rubric or {}
-    budget = [rubric.get(key) for key in BUDGET_KEYS]
-
-    return {
-        "denominator": (None if n_cal is None or n_eval is None
-                        else "n_cal=%s n_eval=%s" % (n_cal, n_eval)),
-        "budget/rubric": (None if any(value is None for value in budget)
-                          else "alpha=%s beta=%s delta=%s method=%s seed=%s" % tuple(budget)),
-        "packet": ("%s / %s" % (manifest.packet_id, manifest.protocol_digest)
-                   if manifest.packet_id and manifest.protocol_digest else None),
-        "bound_unit": None if _absent(unit) else str(unit),
-    }
+    return components_for(n_cal=certificate.get("n_cal"), n_eval=certificate.get("n_eval"),
+                          rubric=manifest.rubric, packet_id=manifest.packet_id,
+                          protocol_digest=manifest.protocol_digest, bound_unit=unit)
 
 
 def missing_components(values: dict[str, Any]) -> list[str]:

@@ -48,7 +48,7 @@ def test_a_valid_bundle_is_indexed_with_artefacts_and_copied_summaries(built, tm
 
     result = ingest(session, bundle_path=packet, project_id="prj-1", actor="producer@example.test",
                     registry_path=_registry(tmp_path, manifest.distribution.sha256),
-                    now="2026-11-10T12:00:00.000000+00:00")
+                    store_dir=tmp_path / "store", now="2026-11-10T12:00:00.000000+00:00")
 
     assert result.accepted and result.state == "indexed"
     assert result.badge == "" and result.packet_id == manifest.packet_id
@@ -76,7 +76,8 @@ def test_one_tampered_byte_is_a_named_refusal_and_nothing_is_indexed(built, tmp_
     tamper_bundle(packet, "data/cert_laya.json", b"tampered")
 
     result = ingest(session, bundle_path=packet, project_id="prj-1", actor="producer@example.test",
-                    registry_path=_registry(tmp_path, manifest.distribution.sha256))
+                    registry_path=_registry(tmp_path, manifest.distribution.sha256),
+                    store_dir=tmp_path / "store")
 
     assert result.state == STATE_REFUSED and not result.accepted
     assert result.refusals, "a refusal names what it refused"
@@ -126,10 +127,10 @@ def test_re_ingesting_the_same_manifest_is_one_row_and_no_duplicate_artefacts(bu
     session = _session()
     packet, manifest, _ = built
     registry = _registry(tmp_path, manifest.distribution.sha256)
-    first = ingest(session, bundle_path=packet, project_id="prj-1", actor="a", registry_path=registry)
+    first = ingest(session, bundle_path=packet, project_id="prj-1", actor="a", registry_path=registry, store_dir=tmp_path / "store")
     before = _counts(session)
 
-    second = ingest(session, bundle_path=packet, project_id="prj-1", actor="a", registry_path=registry)
+    second = ingest(session, bundle_path=packet, project_id="prj-1", actor="a", registry_path=registry, store_dir=tmp_path / "store")
 
     assert second.accepted and second.row_id == first.row_id
     assert "one row" in second.note
@@ -144,8 +145,8 @@ def test_the_same_packet_in_another_project_is_another_row_not_a_collision(built
     packet, manifest, _ = built
     registry = _registry(tmp_path, manifest.distribution.sha256)
 
-    mine = ingest(session, bundle_path=packet, project_id="prj-1", actor="a", registry_path=registry)
-    theirs = ingest(session, bundle_path=packet, project_id="prj-2", actor="b", registry_path=registry)
+    mine = ingest(session, bundle_path=packet, project_id="prj-1", actor="a", registry_path=registry, store_dir=tmp_path / "store")
+    theirs = ingest(session, bundle_path=packet, project_id="prj-2", actor="b", registry_path=registry, store_dir=tmp_path / "store")
 
     assert mine.accepted and theirs.accepted
     assert mine.row_id != theirs.row_id
@@ -176,7 +177,7 @@ def test_a_distribution_the_registry_cannot_confirm_is_accepted_with_a_badge(bui
     session = _session()
     packet, _, _ = built
     result = ingest(session, bundle_path=packet, project_id="prj-1", actor="a",
-                    registry_path=_registry(tmp_path, "0" * 64))
+                    registry_path=_registry(tmp_path, "0" * 64), store_dir=tmp_path / "store")
 
     assert result.accepted, "F1 rule 5 accepts it; the badge is the warning"
     assert result.badge == BADGE_UNVERIFIED
@@ -187,5 +188,22 @@ def test_a_confirmed_distribution_carries_no_badge(built, tmp_path):
     session = _session()
     packet, manifest, _ = built
     result = ingest(session, bundle_path=packet, project_id="prj-1", actor="a",
-                    registry_path=_registry(tmp_path, manifest.distribution.sha256))
+                    registry_path=_registry(tmp_path, manifest.distribution.sha256),
+                    store_dir=tmp_path / "store")
     assert result.badge == "" and result.note == ""
+
+
+def test_the_bundle_is_retained_and_re_verified_before_anyone_reads_it(built, tmp_path):
+    from autorate_portal.ingest import load_stored, stored_bundle
+
+    session = _session()
+    packet, manifest, _ = built
+    store = tmp_path / "store"
+
+    ingest(session, bundle_path=packet, project_id="prj-1", actor="a", store_dir=store)
+
+    assert stored_bundle(store, manifest.manifest_sha256).is_file()
+    again = load_stored(store, manifest.manifest_sha256)
+    assert again is not None and again.ok
+    assert again.manifest.packet_id == manifest.packet_id
+    assert load_stored(store, "0" * 64) is None
