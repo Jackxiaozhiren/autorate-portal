@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>autorate portal</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; --muted: #8888; }
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; max-width: 960px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: end; margin: 16px 0; flex-wrap: wrap; }
+  label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
+  input { padding: 6px 8px; min-width: 320px; }
+  button { padding: 7px 12px; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #8881; }
+  .panel { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0; }
+  .card { border: 1px dashed var(--line); border-radius: 6px; padding: 8px; margin: 6px 0; }
+  .triple { font-size: 12px; color: #8888; margin: 4px 0 0; word-break: break-word; }
+  .reason { font-weight: 600; }
+  .absent, .unavailable { color: #b26a00; }
+  .banner { border-left: 4px solid #c0392b; padding: 6px 10px; background: #c0392b1a; }
+  .slices { display: grid; gap: 12px; }
+  .error { color: #c0392b; }
+  pre { overflow-x: auto; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>autorate portal</h1>
+<p class="muted" id="version">certificates, as the artefacts state them</p>
+
+<div class="row">
+  <label>API token
+    <input id="token" type="password" autocomplete="off" placeholder="project-scoped token">
+  </label>
+  <button id="load">Load certificates</button>
+  <button id="clear">Clear</button>
+</div>
+<p class="error" id="error" role="alert"></p>
+
+<table id="certificates" hidden>
+  <thead>
+    <tr><th>task</th><th>backend</th><th>state</th><th>reason</th><th>n_cal</th><th>n_eval</th></tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<section id="detail" aria-live="polite"></section>
+
+<script>
+// The server escapes every value it renders (emit.e); this page never builds
+// markup from data it has not received rendered. It formats nothing numeric.
+const state = { token: "", rows: [] };
+const el = (id) => document.getElementById(id);
+
+function say(message) {
+  el("error").textContent = message || "";
+}
+
+async function call(path, options = {}) {
+  const headers = Object.assign({"x-api-token": state.token}, options.headers || {});
+  const response = await fetch(path, Object.assign({}, options, { headers }));
+  if (!response.ok) {
+    let detail = response.status + " " + response.statusText;
+    try { const body = await response.json(); detail = body.detail || detail; } catch (ignored) {}
+    throw new Error(detail);
+  }
+  return response;
+}
+
+function rowFor(certificate) {
+  const tr = document.createElement("tr");
+  const cells = [certificate.task, certificate.backend,
+    certificate.feasible === true ? "certified"
+      : certificate.feasible === false ? "refusal" : "unavailable",
+    certificate.reason || (certificate.feasible ? "" : "unavailable: reason"),
+    certificate.n_cal === null ? "unavailable" : certificate.n_cal,
+    certificate.n_eval === null ? "unavailable" : certificate.n_eval];
+  for (const value of cells) {
+    const td = document.createElement("td");
+    td.textContent = value === null || value === undefined || value === "" ? "—" : String(value);
+    tr.appendChild(td);
+  }
+  tr.addEventListener("click", () => openCertificate(certificate.id));
+  return tr;
+}
+
+async function openCertificate(id) {
+  try {
+    const response = await call("/api/v1/certificates/" + encodeURIComponent(id) + "/slices");
+    const body = await response.json();
+    el("detail").innerHTML = body.html;
+  } catch (error) {
+    say(error.message);
+  }
+}
+
+async function load() {
+  state.token = el("token").value.trim();
+  say("");
+  if (!state.token) { say("a project-scoped token is required"); return; }
+  try {
+    const response = await call("/api/v1/certificates");
+    const rows = await response.json();
+    const body = el("certificates").querySelector("tbody");
+    body.replaceChildren(...rows.map(rowFor));
+    el("certificates").hidden = rows.length === 0;
+    el("detail").replaceChildren();
+    if (rows.length === 0) { say("no certificates in this project yet"); }
+  } catch (error) {
+    say(error.message);
+  }
+}
+
+el("load").addEventListener("click", load);
+el("clear").addEventListener("click", () => {
+  state.token = "";
+  el("token").value = "";
+  el("detail").replaceChildren();
+  el("certificates").hidden = true;
+  say("");
+});
+
+fetch("/version").then((r) => r.json()).then((body) => {
+  el("version").textContent = "portal " + body.version + " · pinned autorate " + body.autorate;
+}).catch(() => {});
+</script>
+</body>
+</html>
