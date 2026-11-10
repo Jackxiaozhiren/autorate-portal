@@ -209,7 +209,10 @@ itself a failure.
 
 The export-lane row used to name one variable, and this plan was run literally
 against it: `AUTORATE_TRACKED_FILES` alone leaves the corpus in view, so the
-suite executes a different lane and reports `1256 passed, 7 skipped`. The
+suite executes a different lane and reports `1255 passed, 3 skipped`
+(`gate/export_pytest_corpus_present_repro.log`, rc 0). The first version of
+this paragraph said `1256 passed, 7 skipped`; that was a miscount of progress
+marks, not a reading. Section 8.3: corrected, not annotated.
 `1227 passed, 31 skipped` reading belongs to the run where
 `AUTORATE_FEISHU_ROOT=/nonexistent` removes the corpus, and it reproduces
 to the test once both variables are set.
