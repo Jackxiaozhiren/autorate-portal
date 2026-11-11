@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 from . import auth, db
 from .ingest import ingest as ingest_bundle, load_stored, packet_store
 from .manifest import sha256_bytes
-from .views import certificate_panel, packet_header, slice_context, slice_view
+from .views import (certificate_panel, packet_header, slice_companion, slice_context,
+                    slice_rows, slice_view)
 
 WEB_DIR = Path(__file__).parent / "web"
 DEFAULT_SALT = "autorate-portal-salt"
@@ -169,14 +170,41 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         document = json.loads(stored.files[artifact.path].decode("utf-8"), parse_float=str)
         panel = certificate_panel(summary=summary, packet=packet, rubric=stored.manifest.rubric,
                                   certificate=document)
-        view = slice_view(pooled=panel, companion=None, document=document,
-                          context=slice_context(stored.manifest, document))
+        slices_document = _slice_document(packet, stored, document)
+        view = slice_view(pooled=panel, companion=slice_companion(slices_document),
+                          document=slices_document,
+                          context=slice_context(stored.manifest, slices_document))
         return {"certificate": panel.title, "state": panel.state, "reason": panel.reason,
                 "html": view["html"], "notes": list(view["notes"])}
 
     if WEB_DIR.is_dir():
         app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
     return app
+
+
+def _slice_document(packet: db.Packet, stored, certificate: dict) -> dict:
+    """The document F3 should read: the certificate's own slices, or the packet's.
+
+    F3 is a per-packet question ("does the working average hide a failing
+    group?"), and the frozen repository publishes its groups in a separate
+    artefact (`slices_language.json`), not inside each certificate. Reading only
+    the certificate made the endpoint answer `no_slice_evidence` for a packet
+    that publishes four groups. The artefact is found by asking each document in
+    the packet whether it carries slice rows - no file-name guessing, and a
+    packet with none still answers with what it has.
+    """
+    if slice_rows(certificate):
+        return certificate
+    for artifact in sorted(packet.artifacts, key=lambda row: row.path):
+        if artifact.kind != "document":
+            continue
+        try:
+            document = json.loads(stored.files[artifact.path].decode("utf-8"), parse_float=str)
+        except (KeyError, ValueError):
+            continue
+        if slice_rows(document):
+            return document
+    return certificate
 
 
 def _packet_for(session: Session, who: auth.Principal, packet_id: str) -> db.Packet:

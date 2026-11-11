@@ -46,7 +46,10 @@ def test_a_slices_artefact_renders_every_group_with_its_own_denominator():
                                       "km": {"n_cal": 402, "n_eval": 402, "feasible": False,
                                              "reason": "empty_feasible_set"}}}}
 
-    total, refused, problems = parity.slice_report(document)
+    from types import SimpleNamespace
+    manifest = SimpleNamespace(rubric={"alpha": 0.05}, packet_id="pkt-test",
+                               protocol_digest="abcdef123456")
+    total, refused, problems = parity.slice_report(document, manifest)
 
     assert (total, refused, problems) == (2, 2, [])
 

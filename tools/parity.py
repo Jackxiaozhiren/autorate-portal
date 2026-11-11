@@ -29,11 +29,12 @@ sys.path.insert(0, str(ROOT / "src"))
 from autorate_portal import db  # noqa: E402
 from autorate_portal.ingest import ingest, summary_fields  # noqa: E402
 from autorate_portal.packet import build  # noqa: E402
-from autorate_portal.views import Panel, packet_header, slice_rows, slice_view  # noqa: E402
+from autorate_portal.views import (Panel, packet_header, slice_companion, slice_context,  # noqa: E402
+                                    slice_rows, slice_view)
 
 from autorate_portal.fixtures import ALL_ARTEFACTS, ARTEFACTS, SLICE_ARTEFACTS  # noqa: E402
 
-EXPECTED_REDERIVED = "612 /612"
+PINNED_REDERIVED = "612 /612"
 REDERIVED = re.compile(r"re-derived\s+([0-9]+ /[0-9]+)\s+values")
 WHEEL = "autorate-0.1.2-py3-none-any.whl"
 WHEEL_SHA256 = "7709d3faa560417efcbd8066f6db79d741d995bbbb9b23d2d595ed2a6fb38205"
@@ -62,11 +63,12 @@ def published_denominator(frozen: Path) -> str | None:
     return found.group(1) if found else None
 
 
-def slice_report(document: dict) -> tuple[int, int, list[str]]:
-    """Render one slices artefact the way the portal does, and grade the result."""
+def slice_report(document: dict, manifest) -> tuple[int, int, list[str]]:
+    """Render one slices artefact through the same calls the HTTP surface makes."""
     rows = slice_rows(document)
-    html = slice_view(pooled=Panel("pooled", "certified", "", ""), companion=None,
-                      document=document)["html"]
+    html = slice_view(pooled=Panel("pooled", "certified", "", ""),
+                      companion=slice_companion(document), document=document,
+                      context=slice_context(manifest, document))["html"]
     problems: list[str] = []
     refused = 0
     for row in rows:
@@ -147,11 +149,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     failures: list[str] = []
-    expected = published or EXPECTED_REDERIVED
+    expected = published or PINNED_REDERIVED
     if published is None:
         failures.append("the frozen tree publishes no `re-derived N /M` line to compare against")
-    elif published != EXPECTED_REDERIVED:
-        failures.append("the published line %r is not the pinned %r" % (published, EXPECTED_REDERIVED))
+    elif published != PINNED_REDERIVED:
+        failures.append("the published line %r is not the pinned %r" % (published, PINNED_REDERIVED))
 
     with tempfile.TemporaryDirectory() as work:
         work_path = Path(work)
@@ -188,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         for name in SLICE_ARTEFACTS:
             document = json.loads((args.frozen / name).read_text(encoding="utf-8"),
                                   parse_float=str)
-            total, refused, problems = slice_report(document)
+            total, refused, problems = slice_report(document, manifest)
             print("PARITY SLICES=%s rows=%d refusals=%d" % (name, total, refused))
             if total == 0:
                 failures.append("%s: the portal renders no slice rows for a published slices artefact" % name)
@@ -214,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
     if failures:
         print("PARITY FAIL: %d difference(s)" % len(failures))
         return 1
-    print("PARITY OK: %d artefacts byte-equal, denominators %s" % (len(ALL_ARTEFACTS), live))
+    print("PARITY OK: %d artefacts compared field-by-field, %d rendered from their published shape, "
+          "denominators %s" % (len(ARTEFACTS), len(SLICE_ARTEFACTS), live))
     return 0
 
 

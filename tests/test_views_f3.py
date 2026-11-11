@@ -102,11 +102,16 @@ def _slices_artefact(**patches):
     groups = {}
     for name, n in (("de", 1487), ("en", 1512), ("km", 402), ("sw", 388)):
         groups[name] = {"n_cal": n, "n_eval": n, "feasible": False, "autorate": None,
-                        "reason": "empty_feasible_set",
+                        "conditional_error_bound": None, "marginal_error_bound": None,
+                        "reason": "empty_feasible_set", "alpha": 0.0125, "beta": 0.05,
+                        "delta": 0.0125, "method": "aps",
                         "envelope": ["no certificate exists, so no action is certified"],
-                        "meta": {"alpha": 0.0125, "beta": 0.05}}
+                        "meta": {"alpha": 0.0125, "beta": 0.05, "seed": 7}}
     groups.update(patches)
-    return {"group_key": "language", "run": {"groups": ["language"], "per_group": groups}}
+    return {"group_key": "language",
+            "run": {"groups": ["language"], "per_group": groups,
+                    "alpha": 0.05, "beta": 0.05, "delta": 0.05,
+                    "corrected_alpha": 0.0125, "corrected_beta": 0.0125, "corrected_delta": 0.0125}}
 
 
 def test_a_published_slices_artefact_is_read_from_run_per_group():
@@ -117,7 +122,8 @@ def test_a_published_slices_artefact_is_read_from_run_per_group():
         assert "language: %s" % name in view["html"]
         assert "n_cal=%d n_eval=%d" % (n, n) in view["html"]
     assert view["html"].count("empty_feasible_set") == 4, "each group keeps its own reason"
-    assert "0.0125" not in view["html"], "a refused group publishes no number to show"
+    for chunk in view["html"].split('data-state="refusal"')[1:]:
+        assert "<code>" not in chunk.split("</div>", 1)[0], "a refused group carries no number"
 
 
 def test_a_group_that_refuses_carries_its_reason_and_no_number():
@@ -130,12 +136,14 @@ def test_a_group_that_refuses_carries_its_reason_and_no_number():
 
 def test_a_group_that_publishes_a_bound_goes_through_emit_and_refuses_without_a_unit():
     artefact = _slices_artefact(de={"n_cal": 100, "n_eval": 100, "feasible": True,
-                                    "autorate": "0.310000", "reason": None,
-                                    "meta": {"alpha": 0.05, "beta": 0.05}})
+                                    "autorate": "0.660000", "reason": None,
+                                    "conditional_error_bound": "0.310000", "alpha": 0.0125,
+                                    "beta": 0.05, "delta": 0.0125, "method": "aps",
+                                    "meta": {"alpha": 0.0125, "beta": 0.05, "seed": 7}})
 
     without_context = slice_view(pooled=_pooled(), companion=_companion(),
                                  document=artefact)["html"]
-    assert "unavailable: budget/rubric" in without_context
+    assert "unavailable: packet id + protocol digest" in without_context
     assert "0.310000" not in without_context, "a bound without its triple is not a claim"
 
     without_unit = slice_view(pooled=_pooled(), companion=_companion(), document=artefact,
@@ -157,3 +165,29 @@ def test_a_group_that_publishes_a_bound_goes_through_emit_and_refuses_without_a_
     assert "pkt-row-1 / abcdef123456" in with_context
     assert "bound_unit: case" in with_context
     assert "n_cal=100 n_eval=100" in with_context
+    assert "alpha=0.0125" in with_context, "the group's own budget, not the certificate's 0.05"
+    assert "0.660000" not in with_context, "the rate is not the worst-slice bound"
+
+
+def test_a_published_rate_is_never_rendered_as_the_worst_slice_bound():
+    artefact = _slices_artefact(km={"n_cal": 402, "n_eval": 402, "feasible": True,
+                                    "autorate": "0.660000", "reason": None,
+                                    "conditional_error_bound": None, "marginal_error_bound": None,
+                                    "alpha": 0.0125, "beta": 0.05, "delta": 0.0125, "method": "aps",
+                                    "meta": {"seed": 7, "bound_unit": "case"}})
+
+    html = slice_view(pooled=_pooled(), companion=_companion(), document=artefact)["html"]
+
+    assert "0.660000" not in html, "a rate published beside a missing bound is not a bound"
+    assert "unavailable" not in html, "a group with no bound is simply a refusal row"
+    assert 'data-state="refusal"' in html
+
+
+def test_the_published_correction_is_displayed_and_never_applied():
+    artefact = _slices_artefact()
+
+    html = slice_view(pooled=_pooled(), companion=_companion(), document=artefact)["html"]
+
+    assert "correction (published by the artefact):" in html
+    assert "corrected alpha 0.0125" in html
+    assert "uncorrected alpha 0.05" in html

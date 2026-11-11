@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -38,7 +39,7 @@ SRC = ROOT / "src" / "autorate_portal"
 MARKER = "\n_PLANT_LANDED_MARKER = %r\n"
 PROBE = (
     "import importlib, sys; "
-    "m = importlib.import_module('autorate_portal.%s'); "
+    "m = importlib.import_module(sys.argv[2]); "
     "assert getattr(m, '_PLANT_LANDED_MARKER', None) == sys.argv[1], "
     "'mutated module is not what executed'; "
     "print('RUNTIME_LANDED')"
@@ -223,10 +224,9 @@ PLANTS: tuple[Plant, ...] = (
           '        if artifact.kind != "protocol":',
           '        if False and artifact.kind != "protocol":',
           "tests/test_api.py::test_ac13_a_viewer_reading_records_is_refused_and_named_in_the_audit"),
-    Plant("parity-fixture-list-becomes-a-glob", "fixtures.py",
-          "ARTEFACTS: tuple[str, ...] = tuple(_NAMES)",
-          "ARTEFACTS: tuple[str, ...] = tuple(sorted(str(p) for p in "
-          "__import__('pathlib').Path('data').glob('cert_*.json')))",
+    Plant("parity-absent-fixtures-not-named", "tools/parity.py",
+          "    return [name for name in ALL_ARTEFACTS if not (frozen / name).is_file()]",
+          "    return []",
           "tests/test_parity.py::test_an_absent_fixture_is_named_and_the_run_fails"),
     Plant("f3-per-group-shape-ignored", "views.py",
           '    per_group = run.get("per_group") or {}',
@@ -239,23 +239,45 @@ PLANTS: tuple[Plant, ...] = (
 )
 
 
+def resolve(filename: str) -> Path:
+    """A plant names its file relative to the package, or to the repo root.
+
+    Most plants mutate the package; the parity tool lives in ``tools/`` and is
+    the one control whose subject is outside ``src/``. Resolving rather than
+    guessing keeps a typo from silently pointing at a file that is not there.
+    """
+    package = SRC / filename
+    return package if package.is_file() else ROOT / filename
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def child_env(cache: Path) -> dict[str, str]:
-    """Force every child to import the current working tree, with no stale .pyc."""
+    """Force every child to import the current working tree, with no stale .pyc.
+
+    Each plant also gets its own TMPDIR. This sandbox's mkdir shim ignores
+    ``exist_ok`` on a directory that already exists, so a shared pytest temp
+    root makes ``tmp_path`` fail with FileExistsError - a red that would be
+    about the machine, not about the guard the plant is supposed to test.
+    """
     existing = os.environ.get("PYTHONPATH", "")
-    pythonpath = str(ROOT / "src") + (os.pathsep + existing if existing else "")
+    pythonpath = os.pathsep.join(
+        [str(ROOT / "src"), str(ROOT / "tools")] + ([existing] if existing else []))
+    temp_root = cache / "pytest-tmp"
+    temp_root.mkdir()
     return {**os.environ,
             "PYTHONPATH": pythonpath,
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONPYCACHEPREFIX": str(cache)}
+            "PYTHONPYCACHEPREFIX": str(cache),
+            "TMPDIR": str(temp_root), "TMP": str(temp_root), "TEMP": str(temp_root)}
 
 
 def probe_module(plant: Plant, env: dict[str, str]) -> bool:
-    module = plant.filename[:-3]
-    proc = subprocess.run([sys.executable, "-B", "-c", PROBE % module, plant.name],
+    stem = Path(plant.filename).stem
+    module = stem if plant.filename.startswith("tools/") else "autorate_portal." + stem
+    proc = subprocess.run([sys.executable, "-B", "-c", PROBE, plant.name, module],
                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
     if proc.returncode != 0:
         print("  PROBE FAILED: %s" % (proc.stdout + proc.stderr).strip()[:300])
@@ -277,14 +299,14 @@ def clear_bytecode() -> None:
 def main() -> int:
     print("PLANT HARNESS python=%s plants=%d" % (sys.executable, len(PLANTS)))
     clear_bytecode()
-    before_all = {p: (SRC / p).read_bytes() for p in sorted({x.filename for x in PLANTS})}
+    before_all = {p: resolve(p).read_bytes() for p in sorted({x.filename for x in PLANTS})}
     receipts = {p: digest(data) for p, data in before_all.items()}
 
     fired = 0
     landed_runtime = 0
     restored = 0
     for plant in PLANTS:
-        path = SRC / plant.filename
+        path = resolve(plant.filename)
         original = before_all[plant.filename]
         text = original.decode("utf-8")
         count = text.count(plant.old)
@@ -314,7 +336,12 @@ def main() -> int:
             print("  TEST OUTPUT TAIL: %s" % tail.replace("\n", " | ")[-400:])
 
     clear_bytecode()
-    leftover = [p.name for p in SRC.glob("*.py") if "_PLANT_LANDED_MARKER" in p.read_text()]
+    # A marker is an *assignment* appended to a mutated module. The harness
+    # itself quotes the marker name in its own source, so a substring search
+    # would report itself as a leftover and turn a clean run into a false red.
+    planted = re.compile(r"^_PLANT_LANDED_MARKER\s*=", re.M)
+    leftover = [str(p.relative_to(ROOT)) for p in (*SRC.glob("*.py"), *(ROOT / "tools").glob("*.py"))
+                if planted.search(p.read_text())]
     print("PLANT SUMMARY total=%d runtime_landed=%d red=%d restored=%d leftover_markers=%s"
           % (len(PLANTS), landed_runtime, fired, restored, leftover))
     verdict = (fired == len(PLANTS) and landed_runtime == len(PLANTS)

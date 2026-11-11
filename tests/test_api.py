@@ -126,6 +126,70 @@ def test_the_slice_surface_says_no_slice_evidence_when_the_artefact_declares_non
     assert body["state"] == "refusal" and body["reason"] == "empty_feasible_set"
 
 
+def test_the_slice_surface_renders_the_packets_published_groups_over_http(
+        tmp_path, source_tree, build_kwargs):
+    """C1: the four groups must reach the HTTP response, not just a direct call."""
+    import json
+
+    from autorate_portal.packet import build
+
+    groups = {}
+    for name, n in (("de", 1487), ("en", 1512), ("km", 402), ("sw", 388)):
+        groups[name] = {"n_cal": n, "n_eval": n, "feasible": False,
+                        "reason": "empty_feasible_set", "autorate": None,
+                        "conditional_error_bound": None, "alpha": 0.0125,
+                        "beta": 0.05, "delta": 0.0125, "method": "aps",
+                        "meta": {"seed": 7}}
+    slices = {"group_key": "language",
+              "run": {"groups": ["language"], "per_group": groups,
+                      "alpha": 0.05, "beta": 0.05, "delta": 0.05,
+                      "corrected_alpha": 0.0125, "corrected_beta": 0.0125,
+                      "corrected_delta": 0.0125}}
+    (source_tree / "data" / "slices_language.json").write_text(
+        json.dumps(slices), encoding="utf-8")
+    bundle = tmp_path / "slices.packet.tar"
+    build(source_tree, bundle, **build_kwargs)
+
+    client, _, producer, _ = _world(tmp_path)
+    assert _upload(client, producer, bundle).status_code == 201
+    row = client.get("/api/v1/certificates", headers={"x-api-token": producer}).json()[0]
+    body = client.get("/api/v1/certificates/%s/slices" % row["id"],
+                      headers={"x-api-token": producer}).json()
+
+    html = body["html"]
+    assert html.count('<div class="slice" data-state="refusal"') == 4, html
+    assert html.count("n_cal=") == 4, "each group states its own denominator"
+    assert html.count('<section class="panel"') == 2, "pooled and companion side by side"
+    assert "group-conditional companion / published groups" in html
+    assert "empty_feasible_set" in html
+    assert "no_slice_evidence" not in body["notes"], "the packet published four groups"
+    assert "corrected alpha 0.0125" in html, "F3 rule 5: display the published correction"
+    assert "uncorrected alpha 0.05" in html
+
+
+def test_the_slice_surface_reads_the_packets_slices_artefact_not_only_the_certificate():
+    import json
+    from types import SimpleNamespace
+
+    from autorate_portal.app import _slice_document
+
+    slices = {"group_key": "language",
+              "run": {"groups": ["language"],
+                      "per_group": {"de": {"n_cal": 10, "n_eval": 10, "feasible": False,
+                                           "reason": "empty_feasible_set"}}}}
+    packet = SimpleNamespace(artifacts=[
+        SimpleNamespace(path="data/cert_laya.json", kind="certificate"),
+        SimpleNamespace(path="data/slices_language.json", kind="document"),
+    ])
+    stored = SimpleNamespace(files={"data/cert_laya.json": b"{}",
+                                    "data/slices_language.json": json.dumps(slices).encode()})
+
+    assert _slice_document(packet, stored, {}) == slices
+
+    own = {"slices": [{"key": "lang", "value": "de", "n_cal": 5, "n_eval": 5}]}
+    assert _slice_document(packet, stored, own) is own, "a certificate's own slices win"
+
+
 def test_the_single_page_client_is_served_by_the_same_process(tmp_path):
     client, _, _, _ = _world(tmp_path)
     page = client.get("/")

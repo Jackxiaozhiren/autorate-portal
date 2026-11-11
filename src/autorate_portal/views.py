@@ -129,16 +129,70 @@ def slice_rows(document: dict[str, Any]) -> list[dict[str, Any]]:
     for name, group in per_group.items():
         group = group or {}
         n_cal, n_eval = group.get("n_cal"), group.get("n_eval")
+        # F3 shows the worst slice's *bound*. The per-group rate is a different
+        # quantity and is carried separately so no surface can confuse the two.
+        bound = group.get("conditional_error_bound")
+        if bound is None:
+            bound = group.get("marginal_error_bound")
+        # A group can be computed under a corrected budget of its own (the
+        # committed artefact has alpha 0.0125 per group against 0.05 pooled).
+        # I2 wants the budget it *was* computed under, so the group's own numbers
+        # win over the certificate's whenever the artefact published them.
+        rubric = {"alpha": group.get("alpha"), "beta": group.get("beta"),
+                  "delta": group.get("delta"), "method": group.get("method"),
+                  "seed": (group.get("meta") or {}).get("seed")}
         rows.append({"key": key, "value": name,
                      "n": n_eval if n_eval is not None else n_cal,
                      "n_cal": n_cal, "n_eval": n_eval,
                      "feasible": group.get("feasible"),
                      "reason": group.get("reason"),
                      "envelope": group.get("envelope") or [],
-                     "bound": group.get("autorate"),
+                     "bound": bound, "autorate": group.get("autorate"),
+                     "rubric": rubric,
                      "bound_unit": (group.get("meta") or {}).get("bound_unit")})
     return rows
 
+
+def published_correction(document: dict[str, Any]) -> str | None:
+    """F3 rule 5: display the artefact's correction, compute none.
+
+    The slices artefact publishes ``run.corrected_alpha``/``_beta``/``_delta``
+    beside the uncorrected values; a single-value ``correction`` string is the
+    other shape. Both are quoted, never derived: the portal does not apply a
+    correction and does not work out what one would have been.
+    """
+    run = document.get("run") or {}
+    corrected = {key: run.get("corrected_%s" % key) for key in ("alpha", "beta", "delta")}
+    if not any(value is not None for value in corrected.values()):
+        return None
+    plain = {key: run.get(key) for key in ("alpha", "beta", "delta")}
+    stated = ", ".join("%s %s" % (key, value) for key, value in corrected.items() if value is not None)
+    base = ", ".join("%s %s" % (key, value) for key, value in plain.items() if value is not None)
+    return "corrected %s (published; uncorrected %s)" % (stated, base) if base else "corrected %s (published)" % stated
+
+
+def slice_companion(document: dict[str, Any]) -> Panel | None:
+    """F3 rules 1 and 3: the group-conditional companion, from published rows.
+
+    There is no second certificate in a packet, so the companion panel is built
+    from the group rows the artefact declares. It carries no number: where the
+    simultaneous claim refuses, that refusal is the headline (rule 3), and where
+    the artefact publishes neither a refusal nor a bound, the panel says so.
+    A packet that declares no groups gets no companion at all, which is the case
+    rule 1 labels ``no_slice_evidence``.
+    """
+    rows = slice_rows(document)
+    if not rows:
+        return None
+    reasons = [str(row["reason"]) for row in rows
+               if row.get("feasible") is False and row.get("reason")]
+    if reasons:
+        headline = "; ".join(dict.fromkeys(reasons))
+        return Panel("group-conditional companion / published groups", REFUSAL, headline,
+                     '<p class="reason">%s</p>' % e(headline))
+    return Panel("group-conditional companion / published groups", UNAVAILABLE,
+                 "the published groups state neither a refusal nor a bound",
+                 '<p class="unavailable">unavailable: companion verdict</p>')
 
 def slice_context(manifest, document: dict[str, Any]) -> dict[str, Any]:
     """The certificate-level half of a slice row's triple.
@@ -188,9 +242,10 @@ def slice_view(*, pooled: Panel, companion: Panel | None,
         notes.append(INDEPENDENCE_UNKNOWN)
         body.append('<p class="note">%s</p>' % e(INDEPENDENCE_UNKNOWN))
 
-    if document.get("correction"):
+    correction = document.get("correction") or published_correction(document)
+    if correction:
         body.append('<p class="correction">correction (published by the artefact): %s</p>'
-                    % e(str(document["correction"])))
+                    % e(str(correction)))
 
     panels = [pooled] + ([companion] if companion is not None else [])
     return {"html": '<div class="slices">%s%s</div>' % (
@@ -221,8 +276,11 @@ def _slice_row(row: dict[str, Any], context: dict[str, Any] | None = None) -> st
 
     if row.get("bound") is not None:
         context = context or {}
+        published_rubric = row.get("rubric") or {}
+        rubric = (published_rubric if any(value is not None for value in published_rubric.values())
+                  else context.get("rubric"))
         values = components_for(n_cal=row.get("n_cal"), n_eval=row.get("n_eval"),
-                                rubric=context.get("rubric"),
+                                rubric=rubric,
                                 packet_id=context.get("packet_id") or "",
                                 protocol_digest=context.get("protocol_digest") or "",
                                 bound_unit=row.get("bound_unit") or context.get("bound_unit"))
