@@ -22,6 +22,24 @@ jobs:
         run: uv sync --frozen --extra dev
       - name: Portal suite
         run: uv run --frozen --extra dev pytest -q
+      - name: M4 acceptance criteria, each from its own command
+        run: |
+          set -euo pipefail
+          uv run --frozen --extra dev pytest -o addopts= -q \
+            tests/test_claims.py::test_ac5_a_share_above_the_certified_autorate_refutes_with_both_numbers_and_units
+          echo "M4_AC5_RC=0"
+          uv run --frozen --extra dev pytest -o addopts= -q \
+            tests/test_claims_audit.py::test_ac6_a_field_the_packet_never_measured_is_cannot_be_bounded_with_comparability
+          echo "M4_AC6_RC=0"
+          uv run --frozen --extra dev pytest -o addopts= -q \
+            tests/test_exports.py::test_ac7_a_source_that_no_longer_rederives_blocks_the_export
+          echo "M4_AC7_RC=0"
+          uv run --frozen --extra dev pytest -o addopts= -q \
+            tests/test_trend.py::test_ac8_two_freezes_do_not_share_an_axis_without_a_boundary
+          echo "M4_AC8_RC=0"
+          uv run --frozen --extra dev pytest -o addopts= -q \
+            tests/test_policies.py::test_ac11_a_superseded_packet_is_stale_in_the_sdk_payload
+          echo "M4_AC11_RC=0"
       - name: Negative-control plants (all red, all restored)
         run: uv run --frozen --extra dev python tools/plants.py
       - name: Lint
@@ -87,6 +105,47 @@ jobs:
           uv run --frozen autorate-portal packet verify packets/frozen-full.packet.tar --registry packets/registry.json
           uv run --frozen autorate-portal packet html packets/frozen-full.packet.tar -o packets/frozen-full.html
           uv run --frozen autorate-portal packet html packets/frozen-shareable.packet.tar -o packets/frozen-shareable.html
+
+      - name: Section 11 localization - F2 in both languages as CI artifacts
+        run: |
+          set -euo pipefail
+          uv run --frozen python - <<'PY'
+          import json, pathlib
+          from types import SimpleNamespace
+          from autorate_portal import db, i18n
+          from autorate_portal.ingest import summary_fields
+          from autorate_portal.packet import verify_bundle
+          from autorate_portal.views import f2_locale_artifact
+
+          i18n.assert_complete()
+          v = verify_bundle(pathlib.Path('packets/frozen-full.packet.tar'))
+          assert v.ok and v.manifest is not None, 'the frozen bundle must verify first'
+          manifest = v.manifest
+          name = 'data/cert_jev.json'
+          raw = v.files[name]
+          document = json.loads(raw.decode('utf-8'), parse_float=str)
+          summary = db.CertificateSummary(**summary_fields(manifest, name, raw))
+          packet = SimpleNamespace(id=manifest.packet_id,
+                                   protocol_digest=manifest.protocol_digest,
+                                   manifest_sha256=manifest.manifest_sha256)
+          pages = {}
+          for locale in i18n.LANGUAGES:
+              target = pathlib.Path('packets') / ('f2-%s.html' % locale)
+              text = f2_locale_artifact(summary=summary, packet=packet,
+                                        rubric=manifest.rubric, certificate=document,
+                                        locale=locale)
+              target.write_text(text, encoding='utf-8')
+              pages[locale] = text
+              print('F2 %s: %d bytes' % (locale, len(text.encode('utf-8'))))
+          assert pages['en'] != pages['zh-Hans']
+          assert 'lang="en"' in pages['en'] and 'lang="zh-Hans"' in pages['zh-Hans']
+          for locale, text in pages.items():
+              assert 'empty_feasible_set' in text, locale
+              assert '<div class="card">' not in text, 'a refusal renders as a refusal'
+          assert '拒绝' in pages['zh-Hans'] and 'refusal' in pages['en'], \
+              'the state differs in text as well as hue'
+          print('localization: one catalog, two languages, verbatim refusal reason')
+          PY
 
       - name: Section 8.4 privacy audit
         run: |

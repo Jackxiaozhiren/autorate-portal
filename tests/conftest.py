@@ -134,6 +134,75 @@ def flip_one_byte(path: Path, target: str) -> tuple[str, str]:
     return old, sha256_bytes(bytes(data))
 
 
+# M4 fixtures. The M1-M3 defaults above stay byte-identical: F4/F5 need three
+# published fields those fixtures never had, and adding them to the shared
+# default would silently move every earlier packet hash. The audit text below
+# carries the frozen docs/AUDIT.md sentences verbatim, so AC6's comparability
+# quote is read from a packet's own bytes in tests too.
+KNOWN_LIMITS = [
+    "exchangeability within group assumed; none of it is usable here",
+    "no certificate exists, so no action is certified",
+]
+M4_AUDIT_TEXT = """# Audit (fixture)
+
+- gate compared against: `0.85` (upstream's own gating figure), so the implied error rate is `1 - gate = 0.15`
+- A field name therefore does not say which quantity a file holds; only the program that wrote it does, and the `attributed scale` column is this repository's measurement of which one the audited corpus carries.
+- Quoting either multiple as the other is the definition slip the two definitions make possible, and this artefact publishes both rows precisely so a headline can name which one it means.
+- A multiple is a point estimate and needs its interval before it is anything else.
+- Nothing here certifies a deployment: this measures a rule the reference README instructs, on archived responses.
+"""
+M4_FEASIBILITY = {
+    "producer": "tools/g1_feasibility.py",
+    "rubric": {"alpha": 0.05, "beta": 0.05, "delta": 0.05, "method": "aps", "seed": 7},
+    "reference": [{"n": 100, "k_max": 1, "largest_certifiable_error_rate": 0.01,
+                   "required_observed_accuracy": 0.99,
+                   "size_from": "declared by report.G1_FEASIBILITY_SIZES (the probe's scale)"}],
+    "rows": [{"task": "fixture",
+              "missing_pool_input": ("meta.errors_among_automated counts the errors INSIDE the "
+                                     "automated set, not the errors of the evaluated pool; no "
+                                     "published field of this certificate gives the pool count, "
+                                     "so the oracle ceiling is not computable from these bytes")}],
+}
+CERTIFIED_CERT = {
+    "alpha": 0.05, "beta": 0.05, "delta": 0.05, "method": "aps", "seed": 7,
+    "backend": "fixture", "feasible": True, "reason": None, "autorate": "0.42",
+    "conditional_error_bound": "0.05", "n_cal": 600, "n_eval": 600,
+    "meta": {"at_requested_alpha": {"bound_unit": "case"}},
+}
+
+
+@pytest.fixture
+def m4_source_tree(source_tree):
+    """A packet that publishes what F4/F5 read, without touching M1-M3 fixtures."""
+    protocol = json.loads((source_tree / "protocol.json").read_bytes())
+    protocol["known_limits"] = list(KNOWN_LIMITS)
+    (source_tree / "protocol.json").write_text(
+        json.dumps(protocol, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    (source_tree / "docs" / "AUDIT.md").write_text(M4_AUDIT_TEXT, encoding="utf-8")
+    (source_tree / "data" / "g1_feasibility.json").write_text(
+        json.dumps(M4_FEASIBILITY, sort_keys=True), encoding="utf-8")
+    return source_tree
+
+
+@pytest.fixture
+def m4_built(tmp_path, m4_source_tree, build_kwargs):
+    out = tmp_path / "m4.packet.tar"
+    manifest, raw = build(m4_source_tree, out, **build_kwargs)
+    return out, manifest, raw
+
+
+@pytest.fixture
+def certified_built(tmp_path, m4_source_tree, build_kwargs):
+    """AC5's synthetic certificate: the only way a certified autorate exists."""
+    from autorate_portal.packet import build as build_packet
+
+    (m4_source_tree / "data" / "cert_jev.json").write_text(
+        json.dumps(CERTIFIED_CERT, sort_keys=True), encoding="utf-8")
+    out = tmp_path / "certified.packet.tar"
+    manifest, raw = build_packet(m4_source_tree, out, **build_kwargs)
+    return out, manifest, raw
+
+
 def resign_bundle(path: Path, patches: dict[str, bytes], manifest_patch=None) -> dict:
     """Patch artefacts and reseal the manifest so integrity checks still pass."""
     document, files = split_bundle(path)

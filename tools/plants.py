@@ -236,6 +236,47 @@ PLANTS: tuple[Plant, ...] = (
           '    if row.get("feasible") is False:',
           "    if False and row.get(\"feasible\") is False:",
           "tests/test_views_f3.py::test_a_group_that_refuses_carries_its_reason_and_no_number"),
+
+    # M4 plants. I4 is the invariant turning ACTIVE in this milestone, so its
+    # Section 6.2 plant ("seed two packets at different digests and open a
+    # trend") is here rather than described in prose. Each of the others
+    # removes one guard that an M4 surface relies on.
+    Plant("m4-i4-cross-freeze-trend-drawn", "trend.py",
+          "    if len(digests) > 1 and not boundary:",
+          "    if False and len(digests) > 1 and not boundary:",
+          "tests/test_trend.py::test_ac8_two_freezes_do_not_share_an_axis_without_a_boundary"),
+    Plant("m4-f4-unmeasured-field-accepted", "claims.py",
+          "    if claim.field not in declared:",
+          "    if False and claim.field not in declared:",
+          "tests/test_claims_audit.py::test_ac6_a_field_the_packet_never_measured_is_cannot_be_bounded_with_comparability"),
+    Plant("m4-f4-refutes-comparison-disabled", "claims.py",
+          "    if share > published:",
+          "    if False and share > published:",
+          "tests/test_claims.py::test_ac5_a_share_above_the_certified_autorate_refutes_with_both_numbers_and_units"),
+    Plant("m4-f5-known-limits-omitted", "exports.py",
+          "    if not isinstance(limits, list) or not limits or not all(isinstance(x, str) for x in limits):",
+          "    if False and (not isinstance(limits, list) or not limits or not all(isinstance(x, str) for x in limits)):",
+          "tests/test_exports.py::test_known_limits_is_its_own_section_and_cannot_be_omitted"),
+    Plant("m4-f5-source-less-line-accepted", "exports.py",
+          "    if missing:\n        raise ExportRefused",
+          "    if False and missing:\n        raise ExportRefused",
+          "tests/test_exports.py::test_a_line_without_a_source_fails_the_build_of_the_bundle"),
+    Plant("m4-ac7-stale-source-exported", "exports.py",
+          "        if actual != artefact.sha256:",
+          "        if False and actual != artefact.sha256:",
+          "tests/test_exports.py::test_ac7_a_source_that_no_longer_rederives_blocks_the_export"),
+    Plant("m4-badge-privacy-flag-flipped", "badge.py",
+          '        "records_included": False,',
+          '        "records_included": True,',
+          "tests/test_badge.py::test_the_shareable_badge_carries_the_published_triple_and_no_records"),
+    Plant("m4-i18n-unit-translation-dropped", "i18n.py",
+          "    if key in table:\n        return table[key], True",
+          "    if False and key in table:\n        return table[key], True",
+          "tests/test_i18n.py::test_unit_words_are_translated_and_an_unknown_unit_is_not_guessed"),
+    Plant("m4-ac11-staleness-swallowed", "policies.py",
+          "    state = STALE if newer else ACTIVE",
+          "    state = ACTIVE if newer else ACTIVE",
+          "tests/test_policies.py::test_ac11_a_superseded_packet_is_stale_in_the_sdk_payload"),
 )
 
 

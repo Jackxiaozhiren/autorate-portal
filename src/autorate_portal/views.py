@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from . import db
+from . import db, i18n
 from .emit import EmitRefused, components_for, e, statistic
 
 ABSENT_NUMBER = "not published by this certificate"
@@ -319,3 +319,44 @@ def packet_header(manifest) -> dict[str, str]:
     return {"packet_id": manifest.packet_id, "protocol_digest": manifest.protocol_digest,
             "source_revision": manifest.source_revision,
             "re_derived": manifest.expected_rederived}
+
+
+def localized_state_badge(locale: str, state: str) -> str:
+    """Section 11 accessibility: state differs in text, not in colour alone."""
+    return ('<span class="state-badge" data-state="%s">%s</span>'
+            % (e(state), e(i18n.state_word(locale, state))))
+
+
+def f2_locale_artifact(*, summary: db.CertificateSummary, packet: db.Packet,
+                       rubric: dict[str, Any] | None, certificate: dict[str, Any],
+                       locale: str) -> str:
+    """One self-contained F2 rendering in one locale, for CI artifacts.
+
+    Section 11 asks for F2 in both languages. The panel's numbers, triples and
+    the artefact's refusal reason stay **verbatim** (parity 6.3 and F2 rule 1);
+    only the surrounding labels, the state word and the unit word are
+    translated. A unit is never guessed: ``i18n`` returns an unlisted unit
+    unchanged and the catalog completeness test keeps the two lists equal.
+    """
+    i18n.locale_or_raise(locale)
+    panel = certificate_panel(summary=summary, packet=packet, rubric=rubric,
+                              certificate=certificate)
+    value = summary.autorate if summary.autorate is not None else summary.bound
+    unit_display = (i18n.number_with_unit(locale, value, summary.bound_unit)
+                    if value is not None and summary.bound_unit else "")
+    parts = [
+        '<!doctype html><html lang="%s"><head><meta charset="utf-8">'
+        '<title>F2 · %s</title></head><body>' % (e(locale), e(panel.title)),
+        '<h1>%s</h1>' % e(panel.title),
+        '<p class="state">%s: %s</p>'
+        % (e(i18n.t(locale, "label.state")), e(i18n.state_word(locale, panel.state))),
+        '<p class="reason">%s: %s</p>'
+        % (e(i18n.t(locale, "label.reason")), e(panel.reason or panel.state)),
+        panel.body,
+    ]
+    if unit_display:
+        parts.append('<p class="unit">%s: %s</p>'
+                     % (e(i18n.t(locale, "label.unit")), e(unit_display)))
+    parts.append('<p class="triple">%s</p>' % e(panel.title))
+    parts.append('</body></html>')
+    return "\n".join(parts) + "\n"

@@ -12,21 +12,85 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import auth, db
-from .ingest import ingest as ingest_bundle, load_stored, packet_store
+from . import (auth, badge as badge_module, claims as claims_module, db,
+               exports as exports_module, i18n, policies as policies_module,
+               trend as trend_module)
+from .ingest import (ingest as ingest_bundle, load_stored, packet_store,
+                     provenance as provenance_of)
 from .manifest import sha256_bytes
 from .views import (certificate_panel, packet_header, slice_companion, slice_context,
                     slice_rows, slice_view)
 
 WEB_DIR = Path(__file__).parent / "web"
 DEFAULT_SALT = "autorate-portal-salt"
+
+
+@dataclass(frozen=True)
+class _Context:
+    """The published bytes behind one packet, read once for an F4/F5 surface."""
+
+    packet: db.Packet
+    stored_files: dict[str, bytes]
+    manifest: object
+    summaries: list[db.CertificateSummary]
+    certificates: list[dict]
+    audit_text: str
+    feasibility: dict | None
+
+
+def _locale(request: Request) -> str:
+    asked = request.query_params.get("locale", "")
+    return asked if asked in i18n.LANGUAGES else i18n.DEFAULT_LOCALE
+
+
+def _evidence_context(session: Session, store_dir: Path, who: auth.Principal,
+                      packet_id: str | None):
+    """One project-scoped packet and its re-verified stored bytes, or None."""
+    if packet_id:
+        packet = _packet_for(session, who, packet_id)
+    else:
+        packet = session.scalars(
+            select(db.Packet).where(db.Packet.project_id == who.project_id)
+            .order_by(db.Packet.ingested_at, db.Packet.id)).first()
+        if packet is None:
+            return None
+    verification = load_stored(store_dir, packet.manifest_sha256)
+    if verification is None or not verification.ok or verification.manifest is None:
+        raise HTTPException(status_code=503, detail="the packet store cannot produce this bundle")
+    files = verification.files
+    manifest = verification.manifest
+    summaries = list(session.scalars(
+        select(db.CertificateSummary)
+        .join(db.Artifact, db.CertificateSummary.artifact_id == db.Artifact.id)
+        .where(db.Artifact.packet_id == packet.id)
+        .order_by(db.CertificateSummary.task, db.CertificateSummary.backend)))
+    certificates: list[dict] = []
+    for artefact in manifest.artifacts:
+        if artefact.kind == "certificate" and artefact.path in files:
+            try:
+                certificates.append(json.loads(files[artefact.path].decode("utf-8"),
+                                               parse_float=str))
+            except (ValueError, UnicodeDecodeError):
+                continue
+    audit_text = ""
+    if claims_module.AUDIT_PATH in files:
+        audit_text = files[claims_module.AUDIT_PATH].decode("utf-8", errors="replace")
+    feasibility = None
+    if claims_module.FEASIBILITY_PATH in files:
+        try:
+            feasibility = json.loads(files[claims_module.FEASIBILITY_PATH].decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            feasibility = None
+    return _Context(packet, files, manifest, summaries, certificates, audit_text, feasibility)
 
 
 def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None = None,
@@ -176,6 +240,123 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
                           context=slice_context(stored.manifest, slices_document))
         return {"certificate": panel.title, "state": panel.state, "reason": panel.reason,
                 "html": view["html"], "notes": list(view["notes"])}
+
+    @app.post("/api/v1/claims/check")
+    def check_claim(body: dict, request: Request,
+                    session: Session = Depends(session_dependency),
+                    who: auth.Principal = Depends(principal)) -> dict:
+        """F4: one of three verdicts, with the provenance line (section 4.4)."""
+        auth.require(who, auth.READ_CERTIFICATES)
+        locale = _locale(request)
+        try:
+            claim = claims_module.Claim.from_dict(body)
+        except claims_module.ClaimError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        context = _evidence_context(session, app.state.store_dir, who,
+                                    request.query_params.get("packet"))
+        if context is None:
+            verdict = claims_module.check(claim=claim, summaries=[], packet=None,
+                                          manifest=None, locale=locale)
+        else:
+            verdict = claims_module.check(
+                claim=claim, summaries=context.summaries, packet=context.packet,
+                manifest=context.manifest, audit_text=context.audit_text,
+                feasibility=context.feasibility, certificates=context.certificates,
+                locale=locale)
+        auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                          action="claim.check", target="field:%s" % claim.field)
+        session.commit()
+        result = verdict.as_dict()
+        result["html"] = verdict.card(locale)
+        result["locale"] = locale
+        return result
+
+    @app.post("/api/v1/exports/{kind}")
+    def build_export(kind: str, request: Request,
+                     session: Session = Depends(session_dependency),
+                     who: auth.Principal = Depends(principal)) -> Response:
+        """F5: a deterministic bundle, or a named refusal (AC7)."""
+        guard(who, auth.EXPORT_AUDIT, session, action="export.build",
+              target="kind:%s" % kind)
+        if kind not in exports_module.KINDS:
+            raise HTTPException(status_code=422, detail="unknown bundle kind %s" % kind)
+        context = _evidence_context(session, app.state.store_dir, who,
+                                    request.query_params.get("packet"))
+        if context is None:
+            raise HTTPException(status_code=404, detail="no packet in this project to export")
+        try:
+            bundle = exports_module.build_bundle(
+                kind=kind, manifest=context.manifest, packet=context.packet,
+                files=context.stored_files, session=session)
+        except exports_module.ExportRefused as exc:
+            auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                              action="export.build", target="kind:%s" % kind,
+                              outcome="denied")
+            session.commit()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if bundle.blocked:
+            auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                              action="export.build", target=bundle.block_reason,
+                              outcome="denied")
+            session.commit()
+            return JSONResponse(status_code=409, content=bundle.as_dict())
+        session.add(db.ExportBundle(project_id=who.project_id, kind=kind,
+                                    packet_ids=json.dumps([context.packet.id]),
+                                    manifest_sha256=bundle.bundle_sha256))
+        auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                          action="export.build",
+                          target="bundle:%s" % bundle.bundle_sha256[:12])
+        session.commit()
+        return Response(content=bundle.raw, media_type="application/json",
+                        headers={"x-bundle-sha256": bundle.bundle_sha256})
+
+    @app.get("/api/v1/policies/{policy_id}.well-known")
+    def well_known_policy(policy_id: str, request: Request,
+                          session: Session = Depends(session_dependency)) -> JSONResponse:
+        """AC11's read-only SDK surface. Section 4.4: no auth for public docs."""
+        strict = request.query_params.get("strict") in ("1", "true", "yes")
+        try:
+            payload = policies_module.sdk_payload(session, policy_id, strict=strict,
+                                                  locale=_locale(request))
+        except policies_module.PolicyNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if payload.strict_conflict:
+            return JSONResponse(status_code=409, content=payload.as_dict())
+        return JSONResponse(content=payload.as_dict())
+
+    @app.get("/api/v1/trends/certificates")
+    def trends(request: Request, session: Session = Depends(session_dependency),
+               who: auth.Principal = Depends(principal)) -> dict:
+        """AC8 / I4: two freezes need a boundary, or no trend is drawn."""
+        auth.require(who, auth.READ_CERTIFICATES)
+        boundary = request.query_params.get("boundary") in ("1", "true", "yes")
+        return trend_module.trend_for(session, project_id=who.project_id,
+                                      boundary=boundary, locale=_locale(request)).as_dict()
+
+    @app.get("/api/v1/badge/shareable")
+    def shareable_badge(request: Request, session: Session = Depends(session_dependency),
+                        who: auth.Principal = Depends(principal)) -> Response:
+        """F8's closed vocabulary, shareable with zero records rows (section 8.4)."""
+        auth.require(who, auth.READ_CERTIFICATES)
+        context = _evidence_context(session, app.state.store_dir, who,
+                                    request.query_params.get("packet"))
+        if context is None:
+            raise HTTPException(status_code=404, detail="no packet in this project")
+        badge_label, _note = provenance_of(context.manifest, context.stored_files, None)
+        badge = badge_module.shareable_badge(
+            manifest=context.manifest, packet=context.packet,
+            summaries=context.summaries, provenance_badge=badge_label)
+        if request.query_params.get("format") == "svg":
+            return Response(content=badge.svg, media_type="image/svg+xml")
+        return Response(content=badge.raw, media_type="application/json",
+                        headers={"x-badge-sha256": badge.record["badge_sha256"]})
+
+    @app.get("/api/v1/i18n/{locale}")
+    def messages(locale: str) -> dict[str, str]:
+        """The one catalog, read by the SPA. Two renderers must not drift."""
+        if locale not in i18n.LANGUAGES:
+            raise HTTPException(status_code=404, detail="unknown locale %s" % locale)
+        return dict(i18n.CATALOG[locale])
 
     if WEB_DIR.is_dir():
         app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")

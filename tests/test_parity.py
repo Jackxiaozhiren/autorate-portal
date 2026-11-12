@@ -9,9 +9,11 @@ from autorate_portal.views import packet_header
 
 def test_an_absent_fixture_is_named_and_the_run_fails(tmp_path, capsys):
     named = parity.check_fixtures(tmp_path)
-    assert len(named) == 8, "the literal list names eight artefacts, whatever the tree holds"
+    assert len(named) == 11, "the literal list names eleven artefacts, whatever the tree holds"
     assert "data/cert_laya.json" in named, "a certificate is named, not inferred from a glob"
     assert "data/slices_language.json" in named, "the slices artefact is named too"
+    assert "docs/AUDIT.md" in named, "M4's audit lane is named, not globbed"
+    assert "data/g1_feasibility.json" in named, "M4's feasibility arithmetic is named"
 
     code = parity.main(["--frozen", str(tmp_path)])
 

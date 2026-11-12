@@ -12,7 +12,8 @@
   .muted { color: var(--muted); }
   .row { display: flex; gap: 8px; align-items: end; margin: 16px 0; flex-wrap: wrap; }
   label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
-  input { padding: 6px 8px; min-width: 320px; }
+  input, select { padding: 6px 8px; min-width: 160px; }
+  input[type=text], input[type=password] { min-width: 260px; }
   button { padding: 7px 12px; cursor: pointer; }
   table { width: 100%; border-collapse: collapse; margin-top: 12px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
@@ -26,44 +27,101 @@
   .banner { border-left: 4px solid #c0392b; padding: 6px 10px; background: #c0392b1a; }
   .slices { display: grid; gap: 12px; }
   .error { color: #c0392b; }
+  .boundary { border-top: 2px dashed #c0392b; padding: 6px 0; font-size: 13px; }
+  :focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
   pre { overflow-x: auto; font-size: 12px; }
 </style>
 </head>
 <body>
-<h1>autorate portal</h1>
+<h1 data-i18n="app.title">autorate portal</h1>
 <p class="muted" id="version">certificates, as the artefacts state them</p>
 
 <div class="row">
-  <label>API token
+  <label><span data-i18n="label.locale">language</span>
+    <select id="locale" aria-label="language">
+      <option value="en">English</option>
+      <option value="zh-Hans">简体中文</option>
+    </select>
+  </label>
+  <label><span data-i18n="label.token">API token</span>
     <input id="token" type="password" autocomplete="off" placeholder="project-scoped token">
   </label>
-  <button id="load">Load certificates</button>
-  <button id="clear">Clear</button>
+  <button id="load" data-i18n="label.load">Load certificates</button>
+  <button id="clear" data-i18n="label.clear">Clear</button>
 </div>
 <p class="error" id="error" role="alert"></p>
 
 <table id="certificates" hidden>
   <thead>
-    <tr><th>task</th><th>backend</th><th>state</th><th>reason</th><th>n_cal</th><th>n_eval</th></tr>
+    <tr>
+      <th data-i18n="label.task">task</th><th data-i18n="label.backend">backend</th>
+      <th data-i18n="label.state">state</th><th data-i18n="label.reason">reason</th>
+      <th data-i18n="label.n_cal">n_cal</th><th data-i18n="label.n_eval">n_eval</th>
+    </tr>
   </thead>
   <tbody></tbody>
 </table>
 
 <section id="detail" aria-live="polite"></section>
 
+<h2 data-i18n="label.check_claim">Check a claim</h2>
+<div class="row">
+  <label><span data-i18n="label.share">share</span><input id="claim-share" value="0.66"></label>
+  <label><span data-i18n="label.field">field</span><input id="claim-field" value="confidence"></label>
+  <label><span data-i18n="label.unit">unit</span><input id="claim-unit" value="case"></label>
+  <label><span data-i18n="label.population">population</span><input id="claim-population" value="resolutions"></label>
+  <button id="check" data-i18n="label.check_claim">Check a claim</button>
+</div>
+<section id="verdict" aria-live="polite"></section>
+
+<div class="row">
+  <button id="badge">shareable badge</button>
+  <button id="trend" data-i18n="label.trend">trend</button>
+  <label><span data-i18n="label.export">export</span>
+    <select id="export-kind">
+      <option value="annex_iv">annex_iv</option>
+      <option value="iso_42001">iso_42001</option>
+      <option value="aap">aap</option>
+    </select>
+  </label>
+  <button id="export" data-i18n="label.export">export</button>
+</div>
+<section id="tools" aria-live="polite"></section>
+
 <script>
 // The server escapes every value it renders (emit.e); this page never builds
-// markup from data it has not received rendered. It formats nothing numeric.
-const state = { token: "", rows: [] };
+// numeric markup from data it has not received rendered. It formats nothing
+// numeric. All display strings come from the server's single message catalog;
+// there is no second, drifting copy of the translations here.
+const state = { token: "", rows: [], locale: "en", messages: {} };
 const el = (id) => document.getElementById(id);
 
-function say(message) {
-  el("error").textContent = message || "";
+function msg(key, fallback) { return state.messages[key] || fallback; }
+function say(message) { el("error").textContent = message || ""; }
+
+function withLocale(path) {
+  const join = path.indexOf("?") === -1 ? "?" : "&";
+  return path + join + "locale=" + encodeURIComponent(state.locale);
+}
+
+function applyMessages() {
+  document.documentElement.lang = state.locale;
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    const key = node.getAttribute("data-i18n");
+    if (state.messages[key]) { node.textContent = state.messages[key]; }
+  });
+}
+
+async function loadMessages() {
+  const response = await fetch("/api/v1/i18n/" + encodeURIComponent(state.locale));
+  if (!response.ok) { say("message catalog unavailable: " + response.status); return; }
+  state.messages = await response.json();
+  applyMessages();
 }
 
 async function call(path, options = {}) {
   const headers = Object.assign({"x-api-token": state.token}, options.headers || {});
-  const response = await fetch(path, Object.assign({}, options, { headers }));
+  const response = await fetch(withLocale(path), Object.assign({}, options, { headers }));
   if (!response.ok) {
     let detail = response.status + " " + response.statusText;
     try { const body = await response.json(); detail = body.detail || detail; } catch (ignored) {}
@@ -75,11 +133,12 @@ async function call(path, options = {}) {
 function rowFor(certificate) {
   const tr = document.createElement("tr");
   const cells = [certificate.task, certificate.backend,
-    certificate.feasible === true ? "certified"
-      : certificate.feasible === false ? "refusal" : "unavailable",
+    certificate.feasible === true ? msg("state.certified", "certified")
+      : certificate.feasible === false ? msg("state.refusal", "refusal")
+        : msg("state.unavailable", "unavailable"),
     certificate.reason || (certificate.feasible ? "" : "unavailable: reason"),
-    certificate.n_cal === null ? "unavailable" : certificate.n_cal,
-    certificate.n_eval === null ? "unavailable" : certificate.n_eval];
+    certificate.n_cal === null ? msg("text.unavailable", "unavailable") : certificate.n_cal,
+    certificate.n_eval === null ? msg("text.unavailable", "unavailable") : certificate.n_eval];
   for (const value of cells) {
     const td = document.createElement("td");
     td.textContent = value === null || value === undefined || value === "" ? "—" : String(value);
@@ -94,15 +153,13 @@ async function openCertificate(id) {
     const response = await call("/api/v1/certificates/" + encodeURIComponent(id) + "/slices");
     const body = await response.json();
     el("detail").innerHTML = body.html;
-  } catch (error) {
-    say(error.message);
-  }
+  } catch (error) { say(error.message); }
 }
 
 async function load() {
   state.token = el("token").value.trim();
   say("");
-  if (!state.token) { say("a project-scoped token is required"); return; }
+  if (!state.token) { say(msg("label.token", "a project-scoped token is required")); return; }
   try {
     const response = await call("/api/v1/certificates");
     const rows = await response.json();
@@ -110,17 +167,64 @@ async function load() {
     body.replaceChildren(...rows.map(rowFor));
     el("certificates").hidden = rows.length === 0;
     el("detail").replaceChildren();
-    if (rows.length === 0) { say("no certificates in this project yet"); }
-  } catch (error) {
-    say(error.message);
-  }
+    if (rows.length === 0) { say(msg("label.no_certificates", "no certificates in this project yet")); }
+  } catch (error) { say(error.message); }
 }
 
+async function checkClaim() {
+  say("");
+  try {
+    const response = await call("/api/v1/claims/check", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify({
+        share: el("claim-share").value.trim(), field: el("claim-field").value.trim(),
+        unit: el("claim-unit").value.trim(), population: el("claim-population").value.trim()
+      })
+    });
+    const body = await response.json();
+    el("verdict").innerHTML = body.html || "";
+  } catch (error) { say(error.message); }
+}
+
+async function showBadge() {
+  try {
+    const response = await call("/api/v1/badge/shareable?format=svg");
+    el("tools").innerHTML = await response.text();
+  } catch (error) { say(error.message); }
+}
+
+async function showTrend() {
+  try {
+    const response = await call("/api/v1/trends/certificates?boundary=1");
+    el("tools").innerHTML = (await response.json()).html || "";
+  } catch (error) { say(error.message); }
+}
+
+async function buildExport() {
+  try {
+    const kind = el("export-kind").value;
+    const response = await call("/api/v1/exports/" + encodeURIComponent(kind), { method: "POST" });
+    const body = await response.json();
+    el("tools").innerHTML = '<pre></pre>';
+    el("tools").querySelector("pre").textContent = JSON.stringify(body, null, 2);
+  } catch (error) { say(error.message); }
+}
+
+el("locale").addEventListener("change", async (event) => {
+  state.locale = event.target.value;
+  await loadMessages();
+});
 el("load").addEventListener("click", load);
+el("check").addEventListener("click", checkClaim);
+el("badge").addEventListener("click", showBadge);
+el("trend").addEventListener("click", showTrend);
+el("export").addEventListener("click", buildExport);
 el("clear").addEventListener("click", () => {
   state.token = "";
   el("token").value = "";
   el("detail").replaceChildren();
+  el("verdict").replaceChildren();
+  el("tools").replaceChildren();
   el("certificates").hidden = true;
   say("");
 });
@@ -128,6 +232,7 @@ el("clear").addEventListener("click", () => {
 fetch("/version").then((r) => r.json()).then((body) => {
   el("version").textContent = "portal " + body.version + " · pinned autorate " + body.autorate;
 }).catch(() => {});
+loadMessages().catch(() => {});
 </script>
 </body>
 </html>
