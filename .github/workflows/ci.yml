@@ -24,22 +24,40 @@ jobs:
         run: uv run --frozen --extra dev pytest -q
       - name: M4 acceptance criteria, each from its own command
         run: |
-          set -euo pipefail
+          # Section 0.4 / 13.1: a cited exit code is the command's own, captured
+          # immediately after it. No `=0` literal and no pipeline status array.
+          # `+e` cancels the runner's default `bash -e`, so a failing criterion
+          # still prints its real rc; the harness below asserts all five and
+          # supplies the step's exit code.
+          set +e -u -o pipefail
+          codes="${RUNNER_TEMP}/m4-ac-codes.txt"
+          : > "$codes"
           uv run --frozen --extra dev pytest -o addopts= -q \
             tests/test_claims.py::test_ac5_a_share_above_the_certified_autorate_refutes_with_both_numbers_and_units
-          echo "M4_AC5_RC=0"
+          echo "M4_AC5_RC=$?" >> "$codes"
           uv run --frozen --extra dev pytest -o addopts= -q \
             tests/test_claims_audit.py::test_ac6_a_field_the_packet_never_measured_is_cannot_be_bounded_with_comparability
-          echo "M4_AC6_RC=0"
+          echo "M4_AC6_RC=$?" >> "$codes"
           uv run --frozen --extra dev pytest -o addopts= -q \
             tests/test_exports.py::test_ac7_a_source_that_no_longer_rederives_blocks_the_export
-          echo "M4_AC7_RC=0"
+          echo "M4_AC7_RC=$?" >> "$codes"
           uv run --frozen --extra dev pytest -o addopts= -q \
             tests/test_trend.py::test_ac8_two_freezes_do_not_share_an_axis_without_a_boundary
-          echo "M4_AC8_RC=0"
+          echo "M4_AC8_RC=$?" >> "$codes"
           uv run --frozen --extra dev pytest -o addopts= -q \
             tests/test_policies.py::test_ac11_a_superseded_packet_is_stale_in_the_sdk_payload
-          echo "M4_AC11_RC=0"
+          echo "M4_AC11_RC=$?" >> "$codes"
+          cat "$codes"
+          uv run --frozen python -c "
+          import pathlib, sys
+          lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+          codes = dict(line.split('=', 1) for line in lines)
+          expected = {'M4_AC5_RC', 'M4_AC6_RC', 'M4_AC7_RC', 'M4_AC8_RC', 'M4_AC11_RC'}
+          assert set(codes) == expected, codes
+          bad = {name: rc for name, rc in codes.items() if rc != '0'}
+          print('M4_AC_HARNESS', 'all five captured from their own command;', 'bad:', bad)
+          sys.exit(1 if bad else 0)
+          " "$codes"
       - name: Negative-control plants (all red, all restored)
         run: uv run --frozen --extra dev python tools/plants.py
       - name: Lint

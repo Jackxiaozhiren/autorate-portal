@@ -141,6 +141,36 @@ def test_an_unknown_export_kind_is_a_named_refusal(tmp_path, m4_built):
                        headers={"x-api-token": compliance}).status_code == 422
 
 
+def test_ac7_over_http_a_replay_mismatch_blocks_the_export_with_its_run_id(tmp_path, m4_built):
+    """F5 exception (a) over HTTP: the stored bytes are intact, so a digest-only
+    guard would pass. The replay run's recorded mismatch is the trigger."""
+    client, sessions, producer, _, compliance = _world4(tmp_path)
+    assert _upload(client, producer, m4_built[0]).status_code == 201
+    with sessions() as session:
+        packet = session.scalar(select(db.Packet))
+        assert packet is not None
+        session.add(db.Run(project_id="prj-1", argv="[]", exit_code=4,
+                           started_at="2026-11-13T00:00:00", digest_then="a" * 64,
+                           stdout_sha256="b" * 64, packet_id_in=packet.id))
+        session.commit()
+        run_id = session.scalar(select(db.Run.id))
+
+    response = client.post("/api/v1/exports/annex_iv",
+                           headers={"x-api-token": compliance})
+
+    assert response.status_code == 409, response.text
+    document = json.loads(response.content)
+    assert document["blocked"] is True
+    assert document["run_id"] == run_id
+    assert run_id in document["block_reason"]
+    assert document["lines"] == [], "a blocked export emits no bundle lines"
+    assert document["bundle_sha256"] == "", "no hash is published for a blocked export"
+    with sessions() as session:
+        assert not session.scalars(select(db.ExportBundle)).all()
+    denials = [row for row in _audit(sessions, "export.build") if row.outcome == "denied"]
+    assert denials and run_id in denials[-1].target
+
+
 def test_ac11_over_http_stale_policy_and_strict_conflict(tmp_path):
     client, sessions, _, _, _ = _world4(tmp_path)
     with sessions() as session:

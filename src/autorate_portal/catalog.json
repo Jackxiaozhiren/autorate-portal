@@ -71,6 +71,7 @@
     "msg.refutes": "claim share {claim_share} {claim_unit} exceeds certified autorate {certified_autorate} {certified_unit}",
     "msg.supports": "claim share {claim_share} {claim_unit} does not exceed certified autorate {certified_autorate} {certified_unit}",
     "msg.export_blocked": "export blocked: source artefact no longer re-derives ({path}); run id: {run_id}",
+    "msg.export_blocked_replay": "export blocked: a replay run recorded that the source no longer re-derives; run id: {run_id}",
     "msg.no_run_row": "no replay run recorded the mismatch; the stored digest is the evidence",
     "msg.stale": "packet superseded by protocol_digest {digest}",
     "msg.audit_lane_quoted": "the audit lane is quoted, not parsed into a bound"
@@ -147,6 +148,7 @@
     "msg.refutes": "声明份额 {claim_share} {claim_unit} 超过已认证自动化率 {certified_autorate} {certified_unit}",
     "msg.supports": "声明份额 {claim_share} {claim_unit} 未超过已认证自动化率 {certified_autorate} {certified_unit}",
     "msg.export_blocked": "导出被阻止：源产物不再可复现（{path}）；运行标识：{run_id}",
+    "msg.export_blocked_replay": "导出被阻止：一次重放运行记录了源产物不再可复现；运行标识：{run_id}",
     "msg.no_run_row": "没有重放运行记录该不匹配；存储摘要本身即为证据",
     "msg.stale": "证据包已被 protocol_digest {digest} 取代",
     "msg.audit_lane_quoted": "审计泳道被逐字引用，而非解析成风险上界"

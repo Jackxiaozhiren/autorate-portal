@@ -12,10 +12,12 @@ Four rules make this a different kind of renderer from the web views:
 * **Byte-identical output.** No clock, no locale, no caller-supplied ordering.
   The bundle's own sha256 is computed over the canonical payload and written
   into the document (F5 rule 4), so a reader can re-hash it a year later.
-* **A stale source blocks the export.** If a source artefact's bytes no longer
-  match the manifest, the bundle is refused with the replay run id that showed
-  the mismatch. When no replay run recorded it, that is stated plainly rather
-  than a run id being invented (F5 exception (a), AC7).
+* **A stale source blocks the export.** A replay run whose stored ``exit_code``
+  is the mismatch state blocks the bundle *before any line is assembled*, with
+  that run's id (F5 exception (a), AC7): the source can stop re-deriving while
+  an immutable packet's bytes stay intact. A byte-level digest mismatch is a
+  second, independent trigger. When no replay run recorded a mismatch, that is
+  stated plainly rather than a run id being invented.
 
 A required heading with no source mapping emits ``no evidence published`` and
 is *not* a line - that is F5 exception (b), the honest representation of a real
@@ -116,16 +118,28 @@ def _known_limits(files: dict[str, bytes]) -> tuple[str, ...]:
     return tuple(limits)
 
 
-def mismatch_run_id(session, packet, locale: str = i18n.DEFAULT_LOCALE) -> str:
-    """AC7: name the replay run that showed the mismatch, or say there is none."""
-    absent = i18n.t(locale, "msg.no_run_row")
+def replay_mismatch_run(session, packet) -> str | None:
+    """AC7 / F5 exception (a): the replay run that showed the mismatch.
+
+    This is the *trigger*, not a label. A replay can record that the source no
+    longer re-derives while the stored bytes stay intact - an immutable packet
+    is exactly that case - so a digest-only check would let the export through.
+    ``exit_code == 4`` is the engine's recorded mismatch/refusal state; nothing
+    here computes a bound or re-runs the replay.
+    """
     if session is None or packet is None:
-        return absent
+        return None
     statement = (db.select(db.Run.id)
                  .where(db.Run.packet_id_in == packet.id, db.Run.exit_code == 4)
                  .order_by(db.Run.started_at.desc()))
     row = session.scalars(statement).first()
-    return str(row) if row else absent
+    return str(row) if row else None
+
+
+def mismatch_run_id(session, packet, locale: str = i18n.DEFAULT_LOCALE) -> str:
+    """AC7: name the replay run that showed the mismatch, or say there is none."""
+    found = replay_mismatch_run(session, packet)
+    return found if found else i18n.t(locale, "msg.no_run_row")
 
 
 def build_bundle(*, kind: str, manifest: Manifest, packet, files: dict[str, bytes],
@@ -137,6 +151,17 @@ def build_bundle(*, kind: str, manifest: Manifest, packet, files: dict[str, byte
     declared = {artefact.path: artefact for artefact in manifest.artifacts}
     protocol_digest = packet.protocol_digest
     packet_id = manifest.packet_id
+
+    # F5 exception (a) / AC7: a replay that recorded a mismatch is the trigger.
+    # Checked before any line is assembled, so a stored packet whose bytes are
+    # still intact cannot be exported after its source stopped re-deriving.
+    replay = replay_mismatch_run(session, packet)
+    if replay:
+        return Bundle(kind, packet_id, protocol_digest, limits, (), (),
+                      blocked=True,
+                      block_reason=i18n.t(locale, "msg.export_blocked_replay",
+                                          run_id=replay),
+                      run_id=replay)
 
     lines: list[dict[str, str]] = []
     gaps: list[str] = []
