@@ -297,8 +297,7 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         if context is None:
             raise HTTPException(status_code=404, detail="no packet in this project to export")
         try:
-            run_row = deciding_row(app.state.run_store, context.manifest.packet_id,
-                                   context.manifest.distribution.sha256)
+            run_row = deciding_row(app.state.run_store, context.manifest.packet_id)
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=503,
                                 detail="the run store cannot be read: %s" % exc) from exc

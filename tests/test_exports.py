@@ -136,23 +136,26 @@ def test_ac7_the_deciding_row_is_the_last_observation_not_the_last_line(tmp_path
 
     for states in (("mismatch", "not-run"), ("mismatch", "refused")):
         write(*states)
-        row = deciding_row(store, manifest.packet_id, wheel)
+        row = deciding_row(store, manifest.packet_id)
         assert recorded_mismatch(row), states
 
     write("mismatch", "certified")
-    assert not recorded_mismatch(deciding_row(store, manifest.packet_id, wheel))
+    assert not recorded_mismatch(deciding_row(store, manifest.packet_id))
 
     write("certified", "mismatch")
-    assert recorded_mismatch(deciding_row(store, manifest.packet_id, wheel))
+    assert recorded_mismatch(deciding_row(store, manifest.packet_id))
 
     write("not-run")
-    assert deciding_row(store, manifest.packet_id, wheel) is None
+    assert deciding_row(store, manifest.packet_id) is None
 
     write("mismatch", packet="another-packet")
-    assert deciding_row(store, manifest.packet_id, wheel) is None
+    assert deciding_row(store, manifest.packet_id) is None
 
+    # The pin is not part of packet_id, so a re-sealed copy shares the id and is
+    # decided by the same rows. Over-blocking is fail-closed; matching the pin
+    # would let a one-field manifest edit launder a recorded mismatch.
     write("mismatch", wheel_sha256="b" * 64)
-    assert deciding_row(store, manifest.packet_id, wheel) is None
+    assert recorded_mismatch(deciding_row(store, manifest.packet_id))
 
 
 def test_ac7_a_refused_replay_row_does_not_block_a_source_that_still_rederives(world,
@@ -175,7 +178,7 @@ def test_ac7_the_latest_observation_for_the_packet_wins(world, m4_replay_engine)
     fresh = replay()
     assert stale["state"] == "mismatch" and fresh["state"] == "certified"
 
-    row = deciding_row(store, manifest.packet_id, fresh["wheel_sha256"])
+    row = deciding_row(store, manifest.packet_id)
     assert row is not None and row["run_id"] == fresh["run_id"]
 
     bundle = _build(world, run_row=row)

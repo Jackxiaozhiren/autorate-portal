@@ -264,8 +264,7 @@ def find_row(store_path: Path, run_id: str) -> dict[str, Any] | None:
 OBSERVING_STATES = ("certified", "mismatch")
 
 
-def deciding_row(store_path: Path, packet_id: str,
-                 wheel_sha256: str = "") -> dict[str, Any] | None:
+def deciding_row(store_path: Path, packet_id: str) -> dict[str, Any] | None:
     """The last row that observed this packet's source, in append order.
 
     Only ``certified`` and ``mismatch`` count. A later ``not-run`` (the host
@@ -275,15 +274,19 @@ def deciding_row(store_path: Path, packet_id: str,
     ``certified`` row does supersede an earlier mismatch, because it is an
     observation that the source re-derives again.
 
-    ``wheel_sha256``, when given, keeps a row about a differently pinned copy
-    (same packet id, different wheel) from deciding this packet's export.
+    The match is on ``packet_id`` alone. ``packet_id`` is content-derived
+    (protocol digest, revision, artefact hashes, shareable) and does **not**
+    include the pinned wheel, so a copy re-sealed with a different
+    ``distribution.sha256`` shares the id and is decided by the same rows.
+    That over-blocks such a copy until a replay of it records ``certified`` -
+    the fail-closed reading. Matching the pin instead would let a one-field
+    manifest edit launder a recorded mismatch.
     """
     if not packet_id:
         return None
     deciding = [row for row in read_rows(store_path)
                 if row.get("packet_id") == packet_id
-                and row.get("state") in OBSERVING_STATES
-                and (not wheel_sha256 or row.get("wheel_sha256") == wheel_sha256)]
+                and row.get("state") in OBSERVING_STATES]
     return deciding[-1] if deciding else None
 
 
