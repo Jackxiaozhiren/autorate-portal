@@ -167,7 +167,7 @@ M4_FEASIBILITY = {
 CERTIFIED_CERT = {
     "alpha": 0.05, "beta": 0.05, "delta": 0.05, "method": "aps", "seed": 7,
     "backend": "fixture", "feasible": True, "reason": None, "autorate": "0.42",
-    "conditional_error_bound": "0.05", "n_cal": 600, "n_eval": 600,
+    "bound": "0.05", "conditional_error_bound": "0.05", "n_cal": 600, "n_eval": 600,
     "meta": {"at_requested_alpha": {"bound_unit": "case"}},
 }
 
@@ -247,7 +247,8 @@ def m4_replay_engine(tmp_path, m4_built):
     attempts = {"n": 0}
 
     def replay(*, stdout: str = "re-derived 612 /612 values\n",
-               registry_sha256: str | None = None) -> dict:
+               registry_sha256: str | None = None,
+               ready: bool = True) -> dict:
         attempts["n"] += 1
         registry = tmp_path / ("pins-%d.json" % attempts["n"])
         registry.write_text(json.dumps({"schema": "test", "pins": [
@@ -259,8 +260,9 @@ def m4_replay_engine(tmp_path, m4_built):
         def runner(argv, **kwargs):
             return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
-        environment = Environment(docker_available=True, network_available=True,
-                                  docker_detail="injected", network_detail="injected",
+        environment = Environment(docker_available=ready, network_available=ready,
+                                  docker_detail="injected" if ready else "no docker (injected)",
+                                  network_detail="injected" if ready else "no network (injected)",
                                   runner=runner, wheel_fetcher=lambda _: M4_WHEEL_BYTES)
         run(packet, backend="container", registry_path=registry, env=environment,
             store_path=store)

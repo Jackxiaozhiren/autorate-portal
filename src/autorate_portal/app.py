@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from . import (auth, badge as badge_module, claims as claims_module, db,
                exports as exports_module, i18n, policies as policies_module,
                trend as trend_module)
-from .engine import latest_row
+from .engine import deciding_row
 from .ingest import (ingest as ingest_bundle, load_stored, packet_store,
                      provenance as provenance_of)
 from .manifest import sha256_bytes
@@ -104,9 +104,10 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     app.state.sessions = sessions
     app.state.store_dir = packet_store(store_dir)
     # The run store is the same append-only JSONL the CLI writes with
-    # `autorate-portal run --runs <path>`; AC7 reads the latest row for a
-    # packet from it. One path, configured by the operator; the default keeps
-    # the log beside the packet store rather than in the process's cwd.
+    # `autorate-portal run --runs <path>` (or `AUTORATE_RUN_STORE`, which both
+    # sides read). AC7 reads the last *observing* row for a packet from it.
+    # The default sits beside the packet store, so it inherits that store's
+    # base path; pin an absolute path with the env var in a deployment.
     app.state.run_store = Path(run_store) if run_store is not None else Path(
         os.environ.get("AUTORATE_RUN_STORE") or (app.state.store_dir / "runs.jsonl"))
     app.state.salt = salt or os.environ.get("AUTHORATE_TOKEN_SALT") or DEFAULT_SALT
@@ -296,8 +297,9 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         if context is None:
             raise HTTPException(status_code=404, detail="no packet in this project to export")
         try:
-            run_row = latest_row(app.state.run_store, context.manifest.packet_id)
-        except ValueError as exc:
+            run_row = deciding_row(app.state.run_store, context.manifest.packet_id,
+                                   context.manifest.distribution.sha256)
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=503,
                                 detail="the run store cannot be read: %s" % exc) from exc
         try:

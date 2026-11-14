@@ -83,6 +83,22 @@ def test_ac5_over_http_the_synthetic_certified_autorate_refutes(tmp_path, certif
     assert [row["unit"] for row in body["numbers"]] == ["case", "case"]
 
 
+def test_a_published_bound_is_not_answered_with_the_certified_share(
+        tmp_path, certified_built):
+    """The certificate publishes both `autorate` and `bound`; only the share bounds."""
+    client, _, producer, _, _ = _world4(tmp_path)
+    assert _upload(client, producer, certified_built[0]).status_code == 201
+
+    body = client.post("/api/v1/claims/check", headers={"x-api-token": producer},
+                       json={"share": "0.66", "field": "bound", "unit": "case",
+                             "population": "resolutions"}).json()
+
+    assert body["verdict"] == "cannot_be_bounded"
+    assert "different quantity" in body["reason"]
+    assert body["numbers"] == [], "a bound is not a share and is never printed as one"
+    assert "0.42" not in body["html"] and "0.66" not in body["html"]
+
+
 def test_f4_exception_b_no_packet_returns_the_one_f1_command(tmp_path):
     client, _, _, viewer, _ = _world4(tmp_path)
     body = client.post("/api/v1/claims/check?locale=zh-Hans",
@@ -169,6 +185,42 @@ def test_ac7_over_http_a_replay_mismatch_blocks_the_export_with_its_run_id(
         assert not session.scalars(select(db.ExportBundle)).all()
     denials = [row for row in _audit(sessions, "export.build") if row.outcome == "denied"]
     assert denials and row["run_id"] in denials[-1].target
+
+
+def test_ac7_a_later_not_run_row_does_not_lift_a_recorded_mismatch(
+        tmp_path, m4_replay_engine):
+    """AC10: `not-run` is never a pass, and never a clearing observation either.
+
+    The host losing Docker is one ordinary command away; it must not re-open an
+    export that a real replay closed.
+    """
+    packet_path, store, replay = m4_replay_engine
+    mismatch = replay(stdout="re-derived 611 /612 values\n")
+    absent = replay(ready=False)
+    assert mismatch["state"] == "mismatch" and absent["state"] == "not-run"
+    client, _, producer, _, compliance = _world4(tmp_path, run_store=store)
+    assert _upload(client, producer, packet_path).status_code == 201
+
+    response = client.post("/api/v1/exports/annex_iv",
+                           headers={"x-api-token": compliance})
+
+    assert response.status_code == 409, response.text
+    document = json.loads(response.content)
+    assert document["run_id"] == mismatch["run_id"]
+    assert document["lines"] == []
+
+
+def test_a_run_store_that_is_a_directory_is_a_named_503(tmp_path, m4_built):
+    broken = tmp_path / "runs-as-directory"
+    broken.mkdir()
+    client, _, producer, _, compliance = _world4(tmp_path, run_store=broken)
+    assert _upload(client, producer, m4_built[0]).status_code == 201
+
+    response = client.post("/api/v1/exports/annex_iv",
+                           headers={"x-api-token": compliance})
+
+    assert response.status_code == 503, response.text
+    assert "run store" in response.json()["detail"]
 
 
 def test_an_unreadable_run_store_is_a_named_503_not_an_export(

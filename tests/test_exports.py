@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from autorate_portal import exports
+from autorate_portal.engine import deciding_row, recorded_mismatch
 from autorate_portal.packet import verify_bundle
 from conftest import KNOWN_LIMITS
 
@@ -116,6 +117,44 @@ def test_ac7_names_the_replay_run_that_showed_the_mismatch_when_one_exists(world
     assert row["run_id"] in bundle.block_reason
 
 
+def test_ac7_the_deciding_row_is_the_last_observation_not_the_last_line(tmp_path, world):
+    """A ``not-run``/``refused`` row is not an observation: it cannot clear a mismatch.
+
+    AC10 says ``not-run`` is never a pass; reading the literal last line would
+    let one ordinary command lift a recorded mismatch and re-open the export.
+    """
+    manifest, _packet, _files = world
+    store = tmp_path / "runs.jsonl"
+    wheel = "a" * 64
+
+    def write(*states: str, packet: str | None = None, wheel_sha256: str = wheel) -> None:
+        store.write_text("".join(
+            json.dumps({"run_id": "r%d" % number, "state": state,
+                        "packet_id": packet or manifest.packet_id,
+                        "wheel_sha256": wheel_sha256}) + "\n"
+            for number, state in enumerate(states)), encoding="utf-8")
+
+    for states in (("mismatch", "not-run"), ("mismatch", "refused")):
+        write(*states)
+        row = deciding_row(store, manifest.packet_id, wheel)
+        assert recorded_mismatch(row), states
+
+    write("mismatch", "certified")
+    assert not recorded_mismatch(deciding_row(store, manifest.packet_id, wheel))
+
+    write("certified", "mismatch")
+    assert recorded_mismatch(deciding_row(store, manifest.packet_id, wheel))
+
+    write("not-run")
+    assert deciding_row(store, manifest.packet_id, wheel) is None
+
+    write("mismatch", packet="another-packet")
+    assert deciding_row(store, manifest.packet_id, wheel) is None
+
+    write("mismatch", wheel_sha256="b" * 64)
+    assert deciding_row(store, manifest.packet_id, wheel) is None
+
+
 def test_ac7_a_refused_replay_row_does_not_block_a_source_that_still_rederives(world,
                                                                                 m4_replay_engine):
     """``refused`` also exits 4; only ``state == "mismatch"`` may block a bundle."""
@@ -128,14 +167,18 @@ def test_ac7_a_refused_replay_row_does_not_block_a_source_that_still_rederives(w
     assert not bundle.blocked and bundle.lines
 
 
-def test_ac7_the_latest_run_for_the_packet_wins(world, m4_replay_engine):
+def test_ac7_the_latest_observation_for_the_packet_wins(world, m4_replay_engine):
     """A later successful replay supersedes an earlier mismatch (export time)."""
-    _path, _store, replay = m4_replay_engine
+    manifest, _packet, _files = world
+    _path, store, replay = m4_replay_engine
     stale = replay(stdout="re-derived 611 /612 values\n")
     fresh = replay()
     assert stale["state"] == "mismatch" and fresh["state"] == "certified"
 
-    bundle = _build(world, run_row=fresh)
+    row = deciding_row(store, manifest.packet_id, fresh["wheel_sha256"])
+    assert row is not None and row["run_id"] == fresh["run_id"]
+
+    bundle = _build(world, run_row=row)
 
     assert not bundle.blocked and bundle.lines
     assert bundle.run_id == ""

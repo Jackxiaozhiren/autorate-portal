@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -215,7 +216,9 @@ def build_parser() -> argparse.ArgumentParser:
     j.add_argument("--backend", choices=("container", "uv"), default="container")
     j.add_argument("--image", default="python:3.13-slim")
     j.add_argument("--registry", default=None)
-    j.add_argument("--runs", default=None, help="append the run row to this JSONL store")
+    j.add_argument("--runs", default=os.environ.get("AUTORATE_RUN_STORE"),
+                   help="append the run row to this JSONL store "
+                        "(default: $AUTORATE_RUN_STORE, the same variable the app reads)")
     j.set_defaults(fn=cmd_run)
 
     runs = sub.add_parser("runs", help="inspect recorded run rows")

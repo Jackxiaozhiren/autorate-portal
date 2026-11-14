@@ -257,17 +257,34 @@ def find_row(store_path: Path, run_id: str) -> dict[str, Any] | None:
     return None
 
 
-def latest_row(store_path: Path, packet_id: str) -> dict[str, Any] | None:
-    """The last recorded attempt for one packet, in append order.
+#: The states in which a replay actually observed whether the source still
+#: re-derives. ``not-run`` never ran (AC10) and ``refused`` stopped before the
+#: replay, so neither is an observation: they can neither block an export nor
+#: clear a recorded mismatch.
+OBSERVING_STATES = ("certified", "mismatch")
 
-    The store is append-only, so the last matching line is the latest attempt.
-    AC7 is "at export time": a later successful replay supersedes an earlier
-    mismatch, and a stale mismatch must not block forever.
+
+def deciding_row(store_path: Path, packet_id: str,
+                 wheel_sha256: str = "") -> dict[str, Any] | None:
+    """The last row that observed this packet's source, in append order.
+
+    Only ``certified`` and ``mismatch`` count. A later ``not-run`` (the host
+    lost Docker, F6 exception (a)) or ``refused`` (the pin was rejected) is not
+    evidence that the source re-derives, so it must not lift an earlier
+    mismatch - that would make AC7 bypassable by one ordinary command. A later
+    ``certified`` row does supersede an earlier mismatch, because it is an
+    observation that the source re-derives again.
+
+    ``wheel_sha256``, when given, keeps a row about a differently pinned copy
+    (same packet id, different wheel) from deciding this packet's export.
     """
     if not packet_id:
         return None
-    rows = [row for row in read_rows(store_path) if row.get("packet_id") == packet_id]
-    return rows[-1] if rows else None
+    deciding = [row for row in read_rows(store_path)
+                if row.get("packet_id") == packet_id
+                and row.get("state") in OBSERVING_STATES
+                and (not wheel_sha256 or row.get("wheel_sha256") == wheel_sha256)]
+    return deciding[-1] if deciding else None
 
 
 def recorded_mismatch(row: dict[str, Any] | None) -> bool:
