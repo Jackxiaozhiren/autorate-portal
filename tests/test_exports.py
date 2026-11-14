@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from autorate_portal import db, exports
+from autorate_portal import exports
 from autorate_portal.packet import verify_bundle
 from conftest import KNOWN_LIMITS
 
@@ -97,27 +97,48 @@ def test_ac7_a_source_that_no_longer_rederives_blocks_the_export(world):
     assert bundle.blocked
     assert bundle.raw == b"" and bundle.lines == ()
     assert "export blocked" in bundle.block_reason
-    assert "no replay run recorded the mismatch" in bundle.block_reason
+    assert "no replay row records a mismatch" in bundle.block_reason
 
 
-def test_ac7_names_the_replay_run_that_showed_the_mismatch_when_one_exists(world):
-    manifest, packet, files = world
-    engine = db.make_engine("sqlite:///:memory:")
-    db.create_all(engine)
-    sessions = db.make_session(engine)
-    with sessions() as session:
-        session.add(db.Run(project_id="prj-1", argv="[]", exit_code=4,
-                           started_at="2026-11-12T01:00:00", digest_then="a" * 64,
-                           stdout_sha256="b" * 64, packet_id_in=packet.id))
-        session.commit()
-        stale = dict(files)
-        stale["docs/REPORT.md"] = stale["docs/REPORT.md"] + b"\n"
-        bundle = exports.build_bundle(kind="annex_iv", manifest=manifest, packet=packet,
-                                      files=stale, session=session)
+def test_ac7_names_the_replay_run_that_showed_the_mismatch_when_one_exists(world, m4_replay_engine):
+    """The row comes from the product's own writer, keyed to this packet."""
+    manifest, _packet, _files = world
+    _path, _store, replay = m4_replay_engine
+    row = replay(stdout="re-derived 611 /612 values\n")
+    assert row["state"] == "mismatch", "the engine recorded the mismatch"
+    assert row["packet_id"] == manifest.packet_id
 
-        assert bundle.blocked
-        assert bundle.run_id and "no replay run" not in bundle.run_id
-        assert bundle.run_id in bundle.block_reason
+    bundle = _build(world, run_row=row)
+
+    assert bundle.blocked
+    assert bundle.lines == ()
+    assert bundle.run_id == row["run_id"]
+    assert row["run_id"] in bundle.block_reason
+
+
+def test_ac7_a_refused_replay_row_does_not_block_a_source_that_still_rederives(world,
+                                                                                m4_replay_engine):
+    """``refused`` also exits 4; only ``state == "mismatch"`` may block a bundle."""
+    _path, _store, replay = m4_replay_engine
+    row = replay(registry_sha256="0" * 64)
+    assert row["state"] == "refused" and row["rc"] == 4
+
+    bundle = _build(world, run_row=row)
+
+    assert not bundle.blocked and bundle.lines
+
+
+def test_ac7_the_latest_run_for_the_packet_wins(world, m4_replay_engine):
+    """A later successful replay supersedes an earlier mismatch (export time)."""
+    _path, _store, replay = m4_replay_engine
+    stale = replay(stdout="re-derived 611 /612 values\n")
+    fresh = replay()
+    assert stale["state"] == "mismatch" and fresh["state"] == "certified"
+
+    bundle = _build(world, run_row=fresh)
+
+    assert not bundle.blocked and bundle.lines
+    assert bundle.run_id == ""
 
 
 def test_an_unknown_kind_is_a_named_refusal_not_a_generic_bundle(world):

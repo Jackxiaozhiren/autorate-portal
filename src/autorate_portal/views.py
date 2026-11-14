@@ -45,27 +45,31 @@ class Panel:
                 % (e(self.state), e(self.title), e(self.reason or self.state), self.body))
 
 
-def _number(label: str, value: Any, components: dict[str, Any], *, struck: bool = False) -> tuple[dict, str]:
+def _number(label: str, value: Any, components: dict[str, Any], *,
+            struck: bool = False, locale: str = i18n.DEFAULT_LOCALE) -> tuple[dict, str]:
     try:
         markup = statistic(label=label, value=value, values=components)
     except EmitRefused as exc:
         missing = ", ".join(exc.missing)
         return ({"label": label, "value": None, "missing": exc.missing},
-                '<p class="unavailable">%s: unavailable: %s</p>' % (e(label), e(missing)))
+                '<p class="unavailable">%s: %s</p>'
+                % (e(label), e(i18n.t(locale, "text.unavailable_component",
+                                      component=missing))))
     if struck:
         markup = '<div class="struck"><s>%s</s></div>' % markup
     return {"label": label, "value": str(value), "missing": []}, markup
 
 
-def _banner(mismatch: tuple[str, str]) -> str:
-    return ('<p class="banner provenance-mismatch">provenance mismatch: stored digest %s, '
-            'replay digest %s - the number below is struck through</p>'
-            % (e(mismatch[0]), e(mismatch[1])))
+def _banner(mismatch: tuple[str, str], locale: str = i18n.DEFAULT_LOCALE) -> str:
+    return ('<p class="banner provenance-mismatch">%s</p>'
+            % e(i18n.t(locale, "text.provenance_mismatch",
+                       stored=mismatch[0], replay=mismatch[1])))
 
 
 def certificate_panel(*, summary: db.CertificateSummary, packet: db.Packet,
                       rubric: dict[str, Any] | None, certificate: dict[str, Any],
-                      mismatch: tuple[str, str] | None = None) -> Panel:
+                      mismatch: tuple[str, str] | None = None,
+                      locale: str = i18n.DEFAULT_LOCALE) -> Panel:
     components = components_for(n_cal=summary.n_cal, n_eval=summary.n_eval, rubric=rubric,
                                 packet_id=certificate.get("packet_id") or packet.id,
                                 protocol_digest=packet.protocol_digest,
@@ -73,26 +77,32 @@ def certificate_panel(*, summary: db.CertificateSummary, packet: db.Packet,
     title = "%s / %s" % (summary.task, summary.backend)
 
     if summary.feasible is None:
-        return Panel(title, UNAVAILABLE, "the artefact does not state feasibility",
-                     '<p class="unavailable">unavailable: feasible</p>')
+        return Panel(title, UNAVAILABLE, i18n.t(locale, "text.feasibility_unstated"),
+                     '<p class="unavailable">%s</p>'
+                     % e(i18n.t(locale, "text.unavailable_component",
+                                 component=i18n.t(locale, "label.feasible"))))
 
     if summary.feasible is False:
         reason = summary.reason or ""
         if not reason.strip():
-            return Panel(title, REFUSAL, "refusal recorded without a reason",
-                         '<p class="unavailable">unavailable: reason</p>')
+            return Panel(title, REFUSAL, i18n.t(locale, "text.refusal_without_reason"),
+                         '<p class="unavailable">%s</p>'
+                         % e(i18n.t(locale, "text.unavailable_component",
+                                     component=i18n.t(locale, "label.reason"))))
         return Panel(title, REFUSAL, reason, '<p class="reason">%s</p>' % e(reason))
 
     numbers: list[dict[str, Any]] = []
     chunks: list[str] = []
     if mismatch is not None:
-        chunks.append(_banner(mismatch))
+        chunks.append(_banner(mismatch, locale))
     for label, value in (("autorate", summary.autorate), ("bound", summary.bound)):
         if value is None:
             numbers.append({"label": label, "value": None, "missing": [label]})
-            chunks.append('<p class="absent">%s: %s</p>' % (e(label), e(ABSENT_NUMBER)))
+            chunks.append('<p class="absent">%s: %s</p>'
+                          % (e(label), e(i18n.t(locale, "text.absent_number"))))
             continue
-        record, markup = _number(label, value, components, struck=mismatch is not None)
+        record, markup = _number(label, value, components, struck=mismatch is not None,
+                                 locale=locale)
         numbers.append(record)
         chunks.append(markup)
 
@@ -100,7 +110,8 @@ def certificate_panel(*, summary: db.CertificateSummary, packet: db.Packet,
     if diagnostic:
         note = certificate.get("diagnostic_note") or ""
         chunks.append('<div class="diagnostic"><p class="disclosure">%s</p>%s%s</div>'
-                      % (e(DISCLOSURE), ('<p class="note">%s</p>' % e(note)) if note else "",
+                      % (e(i18n.t(locale, "text.disclosure")),
+                         ('<p class="note">%s</p>' % e(note)) if note else "",
                          '<pre>%s</pre>' % e(str(diagnostic))))
     return Panel(title, CERTIFIED, "", "".join(chunks), tuple(numbers))
 
@@ -153,7 +164,8 @@ def slice_rows(document: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def published_correction(document: dict[str, Any]) -> str | None:
+def published_correction(document: dict[str, Any],
+                         locale: str = i18n.DEFAULT_LOCALE) -> str | None:
     """F3 rule 5: display the artefact's correction, compute none.
 
     The slices artefact publishes ``run.corrected_alpha``/``_beta``/``_delta``
@@ -168,10 +180,13 @@ def published_correction(document: dict[str, Any]) -> str | None:
     plain = {key: run.get(key) for key in ("alpha", "beta", "delta")}
     stated = ", ".join("%s %s" % (key, value) for key, value in corrected.items() if value is not None)
     base = ", ".join("%s %s" % (key, value) for key, value in plain.items() if value is not None)
-    return "corrected %s (published; uncorrected %s)" % (stated, base) if base else "corrected %s (published)" % stated
+    if base:
+        return i18n.t(locale, "text.correction_published_base", stated=stated, base=base)
+    return i18n.t(locale, "text.correction_published", stated=stated)
 
 
-def slice_companion(document: dict[str, Any]) -> Panel | None:
+def slice_companion(document: dict[str, Any],
+                    locale: str = i18n.DEFAULT_LOCALE) -> Panel | None:
     """F3 rules 1 and 3: the group-conditional companion, from published rows.
 
     There is no second certificate in a packet, so the companion panel is built
@@ -184,15 +199,16 @@ def slice_companion(document: dict[str, Any]) -> Panel | None:
     rows = slice_rows(document)
     if not rows:
         return None
+    title = i18n.t(locale, "text.companion_title")
     reasons = [str(row["reason"]) for row in rows
                if row.get("feasible") is False and row.get("reason")]
     if reasons:
         headline = "; ".join(dict.fromkeys(reasons))
-        return Panel("group-conditional companion / published groups", REFUSAL, headline,
-                     '<p class="reason">%s</p>' % e(headline))
-    return Panel("group-conditional companion / published groups", UNAVAILABLE,
-                 "the published groups state neither a refusal nor a bound",
-                 '<p class="unavailable">unavailable: companion verdict</p>')
+        return Panel(title, REFUSAL, headline, '<p class="reason">%s</p>' % e(headline))
+    return Panel(title, UNAVAILABLE, i18n.t(locale, "text.companion_no_verdict"),
+                 '<p class="unavailable">%s</p>'
+                 % e(i18n.t(locale, "text.unavailable_component",
+                             component=i18n.t(locale, "label.companion_verdict"))))
 
 def slice_context(manifest, document: dict[str, Any]) -> dict[str, Any]:
     """The certificate-level half of a slice row's triple.
@@ -213,39 +229,43 @@ def slice_context(manifest, document: dict[str, Any]) -> dict[str, Any]:
 
 def slice_view(*, pooled: Panel, companion: Panel | None,
                document: dict[str, Any], cap: int = SLICE_CAP,
-               context: dict[str, Any] | None = None) -> dict[str, Any]:
+               context: dict[str, Any] | None = None,
+               locale: str = i18n.DEFAULT_LOCALE) -> dict[str, Any]:
     """F3: pooled and companion side by side, every number with its own n."""
     rows = slice_rows(document)
     notes: list[str] = []
     body: list[str] = []
 
     if companion is None:
-        notes.append(NO_SLICE_EVIDENCE)
-        body.append('<p class="absent">%s</p>' % e(NO_SLICE_EVIDENCE))
+        notes.append(i18n.t(locale, "text.no_slice_evidence"))
+        body.append('<p class="absent">%s</p>' % e(i18n.t(locale, "text.no_slice_evidence")))
 
     kept, excluded = _exclude_degenerate(rows)
     for key in excluded:
-        notes.append("degenerate slice key excluded: %s" % key)
-        body.append('<p class="note">degenerate slice key excluded: %s</p>' % e(key))
+        line = i18n.t(locale, "msg.degenerate_key_excluded", name=key)
+        notes.append(line)
+        body.append('<p class="note">%s</p>' % e(line))
 
     kept, overflow = _cap(kept, cap)
     for row in kept:
-        body.append(_slice_row(row, context))
+        body.append(_slice_row(row, context, locale))
     if overflow:
-        notes.append("and %d more" % overflow)
-        body.append('<p class="note">and %d more</p>' % overflow)
+        line = i18n.t(locale, "msg.and_more", count=overflow)
+        notes.append(line)
+        body.append('<p class="note">%s</p>' % e(line))
 
     shared = document.get("shared_item_note") or document.get("shared_items")
     if shared:
-        body.append('<p class="shared">shared items: %s</p>' % e(str(shared)))
+        body.append('<p class="shared">%s</p>'
+                    % e(i18n.t(locale, "text.shared_items", items=str(shared))))
     else:
-        notes.append(INDEPENDENCE_UNKNOWN)
-        body.append('<p class="note">%s</p>' % e(INDEPENDENCE_UNKNOWN))
+        notes.append(i18n.t(locale, "text.independence_unknown"))
+        body.append('<p class="note">%s</p>' % e(i18n.t(locale, "text.independence_unknown")))
 
-    correction = document.get("correction") or published_correction(document)
+    correction = document.get("correction") or published_correction(document, locale)
     if correction:
-        body.append('<p class="correction">correction (published by the artefact): %s</p>'
-                    % e(str(correction)))
+        body.append('<p class="correction">%s</p>'
+                    % e(i18n.t(locale, "text.correction_label", value=str(correction))))
 
     panels = [pooled] + ([companion] if companion is not None else [])
     return {"html": '<div class="slices">%s%s</div>' % (
@@ -254,7 +274,8 @@ def slice_view(*, pooled: Panel, companion: Panel | None,
         "excluded": tuple(excluded), "overflow": overflow}
 
 
-def _slice_row(row: dict[str, Any], context: dict[str, Any] | None = None) -> str:
+def _slice_row(row: dict[str, Any], context: dict[str, Any] | None = None,
+               locale: str = i18n.DEFAULT_LOCALE) -> str:
     """One slice: its own denominator, its own verdict.
 
     A group that the artefact itself refuses keeps its reason verbatim and gets
@@ -262,14 +283,18 @@ def _slice_row(row: dict[str, Any], context: dict[str, Any] | None = None) -> st
     a bound goes through :func:`emit.statistic` like every other number, so a
     missing unit renders "unavailable: bound_unit" rather than a bare figure.
     """
+    def unavailable(component: str) -> str:
+        return i18n.t(locale, "text.unavailable_component", component=component)
+
     key = row.get("key")
     denominator = ("n_cal=%s n_eval=%s" % (row.get("n_cal"), row.get("n_eval"))
                    if row.get("n_cal") is not None and row.get("n_eval") is not None
-                   else "unavailable: denominator")
+                   else unavailable(i18n.t(locale, "label.denominator")))
 
     if row.get("feasible") is False:
         envelope = row.get("envelope") or []
-        reason = row.get("reason") or (envelope[0] if envelope else None) or "reason not published by this artefact"
+        reason = (row.get("reason") or (envelope[0] if envelope else None)
+                  or i18n.t(locale, "text.reason_not_published"))
         return ('<div class="slice" data-state="refusal"><p>%s: %s</p>'
                 '<p class="reason">%s</p><p class="triple">%s</p></div>'
                 % (e(key), e(row.get("value")), e(reason), e(denominator)))
@@ -289,8 +314,9 @@ def _slice_row(row: dict[str, Any], context: dict[str, Any] | None = None) -> st
             return statistic(label=label, value=row.get("bound"), values=values)
         except EmitRefused as exc:
             return ('<div class="slice" data-state="unavailable"><p>%s: %s</p>'
-                    '<p class="absent">unavailable: %s</p><p class="triple">%s</p></div>'
-                    % (e(key), e(row.get("value")), e(", ".join(exc.missing)), e(denominator)))
+                    '<p class="absent">%s</p><p class="triple">%s</p></div>'
+                    % (e(key), e(row.get("value")), e(unavailable(", ".join(exc.missing))),
+                       e(denominator)))
 
     return ('<div class="slice"><p>%s: %s</p><p class="triple">%s</p></div>'
             % (e(key), e(row.get("value")), e(denominator)))
@@ -340,7 +366,7 @@ def f2_locale_artifact(*, summary: db.CertificateSummary, packet: db.Packet,
     """
     i18n.locale_or_raise(locale)
     panel = certificate_panel(summary=summary, packet=packet, rubric=rubric,
-                              certificate=certificate)
+                              certificate=certificate, locale=locale)
     value = summary.autorate if summary.autorate is not None else summary.bound
     unit_display = (i18n.number_with_unit(locale, value, summary.bound_unit)
                     if value is not None and summary.bound_unit else "")

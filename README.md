@@ -64,6 +64,17 @@ the replay's stdout hash with the manifest's hash. When they disagree the row's 
 `mismatch`, its reason names **both** digests, and the exit code is 4 — the code Section 3.3
 already gives drift. A view renders that as a mismatch, not as a number.
 
+### Export bundles read the run log
+
+`POST /api/v1/exports/{kind}` refuses a bundle when the **latest** stored run row for the packet
+records `state == "mismatch"` (F5 exception (a), AC7). The rows are the same JSONL that
+`autorate-portal run --runs <path>` appends; the app is pointed at that file with
+`create_app(run_store=...)` or `AUTORATE_RUN_STORE`, defaulting to `<packet store>/runs.jsonl`.
+
+Only `state` is read. The replay's own `exit_code` is 0 when it ran and disagreed with the stored
+denominator, and the portal's `rc` is 4 for a plain `refused` as well, so neither exit code can
+stand in for the state: a refusal must not block an export of a source that still re-derives.
+
 ## Manifest contract
 
 `manifest.json` is the first member of the bundle. All fields are **required** — a missing field
@@ -102,7 +113,7 @@ uv run --frozen --extra dev python tools/plants.py
 python tools/i6_plant.py <packet.tar> --backend uv
 ```
 
-`tools/plants.py` runs 21 negative controls: each mutates exactly one guard, proves in a fresh
+`tools/plants.py` runs 54 negative controls: each mutates exactly one guard, proves in a fresh
 interpreter that the mutated module is what actually runs, observes the target test go red, then
 restores the source with a sha256 receipt. Each child gets its own bytecode cache, because CPython
 invalidates `.pyc` by `(source mtime in seconds, size)` — on a fast CI runner, several plants can

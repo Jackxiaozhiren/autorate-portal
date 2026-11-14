@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from . import (auth, badge as badge_module, claims as claims_module, db,
                exports as exports_module, i18n, policies as policies_module,
                trend as trend_module)
+from .engine import latest_row
 from .ingest import (ingest as ingest_bundle, load_stored, packet_store,
                      provenance as provenance_of)
 from .manifest import sha256_bytes
@@ -94,13 +95,20 @@ def _evidence_context(session: Session, store_dir: Path, who: auth.Principal,
 
 
 def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None = None,
-               secret_key: str | None = None) -> FastAPI:
+               secret_key: str | None = None,
+               run_store: Path | None = None) -> FastAPI:
     engine = engine or db.make_engine()
     sessions = db.make_session(engine)
     app = FastAPI(title="autorate portal", version="0.1.0")
     app.state.engine = engine
     app.state.sessions = sessions
     app.state.store_dir = packet_store(store_dir)
+    # The run store is the same append-only JSONL the CLI writes with
+    # `autorate-portal run --runs <path>`; AC7 reads the latest row for a
+    # packet from it. One path, configured by the operator; the default keeps
+    # the log beside the packet store rather than in the process's cwd.
+    app.state.run_store = Path(run_store) if run_store is not None else Path(
+        os.environ.get("AUTORATE_RUN_STORE") or (app.state.store_dir / "runs.jsonl"))
     app.state.salt = salt or os.environ.get("AUTHORATE_TOKEN_SALT") or DEFAULT_SALT
     app.state.secret_key = secret_key or os.environ.get("AUTHORATE_SECRET_KEY") or "dev-only"
 
@@ -218,7 +226,8 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
                 for row in rows]
 
     @app.get("/api/v1/certificates/{summary_id}/slices")
-    def slices(summary_id: str, session: Session = Depends(session_dependency),
+    def slices(summary_id: str, request: Request,
+               session: Session = Depends(session_dependency),
                who: auth.Principal = Depends(principal)) -> dict:
         auth.require(who, auth.READ_CERTIFICATES)
         summary = session.get(db.CertificateSummary, summary_id)
@@ -232,12 +241,14 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         if stored is None or not stored.ok:
             raise HTTPException(status_code=503, detail="the packet store cannot produce this bundle")
         document = json.loads(stored.files[artifact.path].decode("utf-8"), parse_float=str)
+        locale = _locale(request)
         panel = certificate_panel(summary=summary, packet=packet, rubric=stored.manifest.rubric,
-                                  certificate=document)
+                                  certificate=document, locale=locale)
         slices_document = _slice_document(packet, stored, document)
-        view = slice_view(pooled=panel, companion=slice_companion(slices_document),
+        view = slice_view(pooled=panel, companion=slice_companion(slices_document, locale),
                           document=slices_document,
-                          context=slice_context(stored.manifest, slices_document))
+                          context=slice_context(stored.manifest, slices_document),
+                          locale=locale)
         return {"certificate": panel.title, "state": panel.state, "reason": panel.reason,
                 "html": view["html"], "notes": list(view["notes"])}
 
@@ -285,9 +296,14 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         if context is None:
             raise HTTPException(status_code=404, detail="no packet in this project to export")
         try:
+            run_row = latest_row(app.state.run_store, context.manifest.packet_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=503,
+                                detail="the run store cannot be read: %s" % exc) from exc
+        try:
             bundle = exports_module.build_bundle(
                 kind=kind, manifest=context.manifest, packet=context.packet,
-                files=context.stored_files, session=session)
+                files=context.stored_files, run_row=run_row)
         except exports_module.ExportRefused as exc:
             auth.record_audit(session, actor=who.actor, project_id=who.project_id,
                               action="export.build", target="kind:%s" % kind,

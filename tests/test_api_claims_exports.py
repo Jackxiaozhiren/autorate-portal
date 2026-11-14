@@ -13,12 +13,12 @@ from conftest import KNOWN_LIMITS
 SALT = "test-salt"
 
 
-def _world4(tmp_path):
+def _world4(tmp_path, *, run_store=None):
     engine = db.make_engine("sqlite:///" + str(tmp_path / "portal.db"))
     db.create_all(engine)
     sessions = db.make_session(engine)
     app = create_app(engine=engine, store_dir=tmp_path / "store", salt=SALT,
-                     secret_key="k")
+                     secret_key="k", run_store=run_store)
     with sessions() as session:
         session.add(db.Org(id="org-1", name="org-1"))
         session.add(db.Project(id="prj-1", org_id="org-1", name="prj-1"))
@@ -141,19 +141,19 @@ def test_an_unknown_export_kind_is_a_named_refusal(tmp_path, m4_built):
                        headers={"x-api-token": compliance}).status_code == 422
 
 
-def test_ac7_over_http_a_replay_mismatch_blocks_the_export_with_its_run_id(tmp_path, m4_built):
+def test_ac7_over_http_a_replay_mismatch_blocks_the_export_with_its_run_id(
+        tmp_path, m4_replay_engine):
     """F5 exception (a) over HTTP: the stored bytes are intact, so a digest-only
-    guard would pass. The replay run's recorded mismatch is the trigger."""
-    client, sessions, producer, _, compliance = _world4(tmp_path)
-    assert _upload(client, producer, m4_built[0]).status_code == 201
-    with sessions() as session:
-        packet = session.scalar(select(db.Packet))
-        assert packet is not None
-        session.add(db.Run(project_id="prj-1", argv="[]", exit_code=4,
-                           started_at="2026-11-13T00:00:00", digest_then="a" * 64,
-                           stdout_sha256="b" * 64, packet_id_in=packet.id))
-        session.commit()
-        run_id = session.scalar(select(db.Run.id))
+    guard would pass. The row the replay engine appended is the trigger.
+
+    The uploaded packet is the same file the engine replayed, so the app and the
+    run row name one packet.
+    """
+    packet_path, store, replay = m4_replay_engine
+    row = replay(stdout="re-derived 611 /612 values\n")
+    assert row["state"] == "mismatch"
+    client, sessions, producer, _, compliance = _world4(tmp_path, run_store=store)
+    assert _upload(client, producer, packet_path).status_code == 201
 
     response = client.post("/api/v1/exports/annex_iv",
                            headers={"x-api-token": compliance})
@@ -161,14 +161,29 @@ def test_ac7_over_http_a_replay_mismatch_blocks_the_export_with_its_run_id(tmp_p
     assert response.status_code == 409, response.text
     document = json.loads(response.content)
     assert document["blocked"] is True
-    assert document["run_id"] == run_id
-    assert run_id in document["block_reason"]
+    assert document["run_id"] == row["run_id"]
+    assert row["run_id"] in document["block_reason"]
     assert document["lines"] == [], "a blocked export emits no bundle lines"
     assert document["bundle_sha256"] == "", "no hash is published for a blocked export"
     with sessions() as session:
         assert not session.scalars(select(db.ExportBundle)).all()
     denials = [row for row in _audit(sessions, "export.build") if row.outcome == "denied"]
-    assert denials and run_id in denials[-1].target
+    assert denials and row["run_id"] in denials[-1].target
+
+
+def test_an_unreadable_run_store_is_a_named_503_not_an_export(
+        tmp_path, m4_built):
+    """AC7 is 'at export time': if the log cannot be read, the guard cannot pass."""
+    broken = tmp_path / "broken.jsonl"
+    broken.write_text("not a run row\n", encoding="utf-8")
+    client, _, producer, _, compliance = _world4(tmp_path, run_store=broken)
+    assert _upload(client, producer, m4_built[0]).status_code == 201
+
+    response = client.post("/api/v1/exports/annex_iv",
+                           headers={"x-api-token": compliance})
+
+    assert response.status_code == 503, response.text
+    assert "run store" in response.json()["detail"]
 
 
 def test_ac11_over_http_stale_policy_and_strict_conflict(tmp_path):

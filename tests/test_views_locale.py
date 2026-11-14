@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from autorate_portal import db, i18n
-from autorate_portal.views import f2_locale_artifact, localized_state_badge
+from autorate_portal.views import Panel, f2_locale_artifact, localized_state_badge, slice_view
 
 RUBRIC = {"alpha": 0.05, "beta": 0.05, "delta": 0.05,
           "method": "aps", "seed": 7, "unit": "case"}
@@ -64,6 +64,27 @@ def test_a_refusal_carries_no_number_in_either_language():
         page = _render(locale)
         assert '<div class="card">' not in page
         assert "<code>" not in page, "a refusal has no statistic component"
+
+
+def test_the_panel_body_is_in_the_requested_language_not_only_the_header():
+    """The header was localized first; the body must follow the same locale."""
+    summary = _summary(feasible=None, reason=None)
+    english = _render("en", summary)
+    chinese = _render("zh-Hans", summary)
+
+    assert "unavailable: feasible" in english
+    assert "不可用：可行性" in chinese
+    assert "unavailable: feasible" not in chinese
+
+
+def test_the_slice_panel_speaks_the_requested_locale():
+    doc = {"slices": [{"key": "qtype", "value": "single", "n": 5,
+                       "n_cal": 5, "n_eval": 5}]}
+    view = slice_view(pooled=Panel("p", "certified", "", ""), companion=None,
+                      document=doc, locale="zh-Hans")
+
+    assert "已排除退化切片键：qtype" in view["html"]
+    assert "degenerate slice key excluded" not in view["html"]
 
 
 def test_the_state_badge_differs_in_text_not_only_in_hue():

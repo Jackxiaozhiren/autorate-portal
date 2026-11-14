@@ -3,10 +3,15 @@
 The business-facing feature is also the easiest place to lie, so this module
 is deliberately narrow:
 
-* It compares a claim against **published fields only**. A claim naming a field
-  no certificate artefact carries (``confidence`` is the PRD's example) is
-  ``cannot_be_bounded`` with the audit lane's comparability statement quoted
-  verbatim. Same-named fields are not the same quantity.
+* It compares a claim against **published fields only**, and only when the field
+  is the one quantity a certified ``autorate`` measures: a share. A claim naming
+  a field no certificate artefact carries (``confidence`` is the PRD's example)
+  is ``cannot_be_bounded`` with the audit lane's comparability statement quoted
+  verbatim. A claim naming a published field that is **not** a share (``bound``,
+  ``n_cal``, ``alpha``) is also ``cannot_be_bounded``: those are different
+  quantities, and comparing them to ``autorate`` is the definition slip the
+  audit lane warns about. Units are compared too; a claim in one unit is never
+  answered with a number in another.
 * It never computes a statistic. The one numeric operation is a comparison of
   two strings as ``Decimal`` values: the claim's own share and a certified
   ``autorate`` the artefact published. No derived number is printed, and the
@@ -39,6 +44,11 @@ PROTOCOL_PATH = "protocol.json"
 
 VERDICTS = ("bounded_supports", "bounded_refutes", "cannot_be_bounded")
 BOUNDED_SUPPORTS, BOUNDED_REFUTES, CANNOT_BE_BOUNDED = VERDICTS
+
+#: The only field a certified share can be compared against. ``bound`` is an
+#: upper bound, ``n_cal`` a count and ``alpha`` a budget; none is a share, and
+#: F4 rule 1 compares a share or nothing.
+RATE_FIELD = "autorate"
 
 #: Exact substrings of the frozen repository's ``docs/AUDIT.md``. They are read
 #: out of the packet's own bytes, so a packet whose audit lane does not publish
@@ -218,12 +228,18 @@ def check(*, claim: Claim, summaries: list[db.CertificateSummary], packet, manif
     quotes = audit_quotes(audit_text)
     documents = list(certificates)
     declared = published_field_names(documents)
-    summary = summaries[0] if summaries else None
-    provenance = _provenance(manifest, packet, summary)
-    bound = str(summary.bound) if (summary and summary.bound is not None) else \
-        i18n.t(locale, "text.absent_number")
-    denominator = ("n_cal=%s n_eval=%s" % (summary.n_cal, summary.n_eval)
-                   if summary and summary.n_cal is not None and summary.n_eval is not None
+    # I2: the triple travels with the row the number comes from. Taking the
+    # first summary would let one certificate's autorate be shown beside
+    # another certificate's denominator and budget.
+    certified = next((row for row in summaries
+                      if row.feasible is True and row.autorate is not None), None)
+    source = certified if certified is not None else (summaries[0] if summaries else None)
+    provenance = _provenance(manifest, packet, source)
+    bound = str(source.bound) if (source is not None and source.bound is not None) \
+        else i18n.t(locale, "text.absent_number")
+    denominator = ("n_cal=%s n_eval=%s" % (source.n_cal, source.n_eval)
+                   if source is not None and source.n_cal is not None
+                   and source.n_eval is not None
                    else i18n.t(locale, "text.absent_number"))
     labels = (i18n.t(locale, "msg.audit_lane_quoted"),
               i18n.t(locale, "text.audit_is_markdown"))
@@ -251,18 +267,42 @@ def check(*, claim: Claim, summaries: list[db.CertificateSummary], packet, manif
         if not comparability:
             comparability = ("the audit lane does not publish the comparability statement "
                              "in this packet; no substitute is quoted")
-        evidence = ({"path": AUDIT_PATH, "key": "comparability", "value": comparability},)
+        extra, feasibility_evidence = _feasibility_additional_data(feasibility, locale)
+        evidence = ({"path": AUDIT_PATH, "key": "comparability", "value": comparability},
+                    *feasibility_evidence)
         return cannot(i18n.t(locale, "msg.field_not_measured", field=claim.field),
-                      comparability=comparability, evidence=evidence)
+                      comparability=comparability, extra=extra, evidence=evidence)
+
+    # A published field that is not a share. ``bound``, ``n_cal`` and ``alpha``
+    # are in the certificate; none is the quantity ``autorate`` measures, so no
+    # comparison is made and no number is printed.
+    if claim.field != RATE_FIELD:
+        comparability = quotes["definition_slip"] or (
+            "the audit lane does not publish the definition-slip statement in this packet; "
+            "no substitute is quoted")
+        evidence = ({"path": "data/cert_*.json", "key": claim.field,
+                     "value": "published; not the certified share"},)
+        return cannot(i18n.t(locale, "msg.field_not_a_share", field=claim.field),
+                      comparability=comparability,
+                      extra=i18n.t(locale, "msg.field_not_a_share_need", field=claim.field),
+                      evidence=evidence)
 
     # A number the packet actually published, under a certificate that says it
     # is feasible. Nothing here derives a bound: both operands are read.
-    certified = next((row for row in summaries
-                      if row.feasible is True and row.autorate is not None), None)
     if certified is None:
         extra, evidence = _feasibility_additional_data(feasibility, locale)
         return cannot(i18n.t(locale, "msg.no_certified_autorate"), extra=extra,
                       evidence=evidence)
+
+    certified_unit = str(certified.bound_unit or manifest.bound_unit or "")
+    evidence = ({"path": "data/cert_*.json", "key": "autorate",
+                 "value": str(certified.autorate)},)
+    if not certified_unit:
+        return cannot(i18n.t(locale, "msg.unit_unstated", claim_unit=claim.unit),
+                      evidence=evidence)
+    if claim.unit != certified_unit:
+        return cannot(i18n.t(locale, "msg.unit_mismatch", claim_unit=claim.unit,
+                             certified_unit=certified_unit), evidence=evidence)
 
     share = _decimal(claim.share)
     published = _decimal(str(certified.autorate))
@@ -270,19 +310,18 @@ def check(*, claim: Claim, summaries: list[db.CertificateSummary], packet, manif
         return cannot("the claim share or the published autorate is not a number; "
                       "no point estimate is derived from either")
 
-    numbers = ({"label": "claim share", "value": claim.share, "unit": claim.unit},
-               {"label": "certified autorate", "value": str(certified.autorate),
-                "unit": str(certified.bound_unit or manifest.bound_unit)})
-    evidence = ({"path": "data/cert_*.json", "key": "autorate",
-                 "value": str(certified.autorate)},)
+    numbers = ({"label": i18n.t(locale, "label.claim_share"), "value": claim.share,
+                "unit": claim.unit},
+               {"label": i18n.t(locale, "label.certified_autorate"),
+                "value": str(certified.autorate), "unit": certified_unit})
     if share > published:
         reason = i18n.t(locale, "msg.refutes", claim_share=claim.share,
                         claim_unit=claim.unit, certified_autorate=str(certified.autorate),
-                        certified_unit=str(certified.bound_unit or manifest.bound_unit))
+                        certified_unit=certified_unit)
         return Verdict(BOUNDED_REFUTES, reason, bound, denominator, provenance,
                        numbers=numbers, audit_labels=labels, evidence=evidence)
     reason = i18n.t(locale, "msg.supports", claim_share=claim.share,
                     claim_unit=claim.unit, certified_autorate=str(certified.autorate),
-                    certified_unit=str(certified.bound_unit or manifest.bound_unit))
+                    certified_unit=certified_unit)
     return Verdict(BOUNDED_SUPPORTS, reason, bound, denominator, provenance,
                    numbers=numbers, audit_labels=labels, evidence=evidence)

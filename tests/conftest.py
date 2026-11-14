@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -216,3 +217,53 @@ def resign_bundle(path: Path, patches: dict[str, bytes], manifest_patch=None) ->
             document[key] = value
     rewrite_bundle(path, files, reseal_manifest(document))
     return document
+
+
+#: M4 only: the wheel bytes the replay engine is allowed to fetch in tests. The
+#: packet copy is re-pinned to this hash so the engine runs without a network.
+M4_WHEEL_BYTES = b"m4-pinned-autorate-wheel-bytes"
+
+
+@pytest.fixture
+def m4_replay_engine(tmp_path, m4_built):
+    """A run store written by the product's own replay writer (AC7's input).
+
+    The packet is a copy re-pinned to :data:`M4_WHEEL_BYTES`, so ``engine.run``
+    can execute against a stub environment. Its protocol digest, artefacts and
+    ``packet_id`` are unchanged - only ``distribution.sha256`` moves - so a row
+    it appends names the same packet the app exports.
+
+    ``replay()`` returns the row it actually recorded, parsed out of the JSONL.
+    """
+    from autorate_portal.engine import run
+    from autorate_portal.replay import Environment
+
+    source = Path(m4_built[0])
+    packet = tmp_path / "replay.packet.tar"
+    document, files = split_bundle(source)
+    document["distribution"]["sha256"] = sha256_bytes(M4_WHEEL_BYTES)
+    rewrite_bundle(packet, files, reseal_manifest(document))
+    store = tmp_path / "runs.jsonl"
+    attempts = {"n": 0}
+
+    def replay(*, stdout: str = "re-derived 612 /612 values\n",
+               registry_sha256: str | None = None) -> dict:
+        attempts["n"] += 1
+        registry = tmp_path / ("pins-%d.json" % attempts["n"])
+        registry.write_text(json.dumps({"schema": "test", "pins": [
+            {"name": "autorate", "version": DEFAULT_VERSION, "wheel": DEFAULT_WHEEL,
+             "sha256": registry_sha256 or sha256_bytes(M4_WHEEL_BYTES),
+             "source": "https://pypi.org/pypi/autorate/%s/json" % DEFAULT_VERSION}]}),
+            encoding="utf-8")
+
+        def runner(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+        environment = Environment(docker_available=True, network_available=True,
+                                  docker_detail="injected", network_detail="injected",
+                                  runner=runner, wheel_fetcher=lambda _: M4_WHEEL_BYTES)
+        run(packet, backend="container", registry_path=registry, env=environment,
+            store_path=store)
+        return json.loads(store.read_text(encoding="utf-8").splitlines()[-1])
+
+    return packet, store, replay

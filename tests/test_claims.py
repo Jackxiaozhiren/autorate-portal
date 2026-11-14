@@ -38,11 +38,12 @@ def _summary(**overrides):
     return db.CertificateSummary(**values)
 
 
-def _check(share="0.66", field="autorate", *, summary=None, certificates=None, **kwargs):
+def _check(share="0.66", field="autorate", *, summary=None, certificates=None,
+           unit="case", manifest=None, **kwargs):
     return claims.check(
-        claim=claims.Claim(share=share, field=field, unit="case", population="resolutions"),
+        claim=claims.Claim(share=share, field=field, unit=unit, population="resolutions"),
         summaries=[summary] if summary is not None else [],
-        packet=_packet(), manifest=_manifest(),
+        packet=_packet(), manifest=manifest or _manifest(),
         certificates=certificates if certificates is not None else [CERT_DOC], **kwargs)
 
 
@@ -117,3 +118,45 @@ def test_claim_from_dict_refuses_a_partial_claim():
     assert claims.Claim.from_dict(
         {"share": "0.66", "field": "autorate", "unit": "case",
          "population": "resolutions"}).field == "autorate"
+
+
+def test_a_published_field_that_is_not_a_share_is_never_compared_to_autorate():
+    """F4 rule 1: ``bound`` is published, and it is still not the certified share.
+
+    Comparing a bound or a count to ``autorate`` is the definition slip the audit
+    lane names, so the verdict is ``cannot_be_bounded`` and no number is printed
+    even though a certified autorate is right there.
+    """
+    summary = _summary(feasible=True, autorate="0.42", bound="0.05", reason=None)
+    verdict = _check("0.66", "bound", summary=summary,
+                     certificates=[{**CERT_DOC, "feasible": True, "autorate": "0.42"}])
+
+    assert verdict.verdict == claims.CANNOT_BE_BOUNDED
+    assert "different quantity" in verdict.reason
+    assert "autorate" in verdict.additional_data
+    assert verdict.numbers == (), "a non-share field is never answered with a number"
+    assert verdict.evidence and verdict.evidence[0]["key"] == "bound"
+
+
+def test_a_claim_in_another_unit_is_not_answered_with_the_certified_number():
+    summary = _summary(feasible=True, autorate="0.42", bound="0.05", reason=None)
+    verdict = _check("0.66", "autorate", unit="record", summary=summary,
+                     certificates=[{**CERT_DOC, "feasible": True, "autorate": "0.42"}])
+
+    assert verdict.verdict == claims.CANNOT_BE_BOUNDED
+    assert "record" in verdict.reason and "case" in verdict.reason
+    assert "units that differ are not compared" in verdict.reason
+    assert verdict.numbers == ()
+
+
+def test_a_certificate_that_states_no_unit_is_not_compared_to_a_claim_unit():
+    no_unit = _manifest()
+    no_unit.bound_unit = None
+    summary = _summary(feasible=True, autorate="0.42", bound="0.05", bound_unit=None,
+                       reason=None)
+    verdict = _check("0.66", "autorate", summary=summary, manifest=no_unit,
+                     certificates=[{**CERT_DOC, "feasible": True, "autorate": "0.42"}])
+
+    assert verdict.verdict == claims.CANNOT_BE_BOUNDED
+    assert "publishes no bound unit" in verdict.reason
+    assert verdict.numbers == ()

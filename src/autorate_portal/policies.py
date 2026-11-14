@@ -38,14 +38,13 @@ class PolicyPayload:
         return dict(self.body)
 
 
-def _superseding_digest(session, policy: db.Policy, packet: db.Packet) -> str:
+def _superseding_packet(session, policy: db.Policy, packet: db.Packet) -> db.Packet | None:
     statement = (select(db.Packet)
                  .where(db.Packet.project_id == policy.project_id,
                         db.Packet.protocol_digest != packet.protocol_digest,
                         db.Packet.ingested_at > packet.ingested_at)
                  .order_by(db.Packet.ingested_at))
-    newer = session.scalars(statement).first()
-    return newer.protocol_digest if newer is not None else ""
+    return session.scalars(statement).first()
 
 
 def sdk_payload(session, policy_id: str, *, strict: bool = False,
@@ -58,15 +57,17 @@ def sdk_payload(session, policy_id: str, *, strict: bool = False,
     if packet is None:
         raise PolicyNotFound("policy %s names a packet that is not in this store" % policy_id)
 
-    newer = _superseding_digest(session, policy, packet)
-    state = STALE if newer else ACTIVE
-    reason = i18n.t(locale, "msg.stale", digest=newer) if newer else ""
+    newer = _superseding_packet(session, policy, packet)
+    state = STALE if newer is not None else ACTIVE
+    reason = i18n.t(locale, "msg.stale", digest=newer.protocol_digest) if newer else ""
     body = {
         "id": policy.id,
         "name": policy.name,
         "state": state,
         "packet_id": policy.packet_id,
         "protocol_digest": packet.protocol_digest,
+        "superseded_by_packet_id": newer.id if newer is not None else None,
+        "superseded_by_protocol_digest": newer.protocol_digest if newer is not None else None,
         "budget": policy.budget,
         "slices": policy.slices,
         "stale_because": reason,

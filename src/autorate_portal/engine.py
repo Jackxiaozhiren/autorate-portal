@@ -255,3 +255,28 @@ def find_row(store_path: Path, run_id: str) -> dict[str, Any] | None:
         if stored.get("run_id") == run_id:
             return stored
     return None
+
+
+def latest_row(store_path: Path, packet_id: str) -> dict[str, Any] | None:
+    """The last recorded attempt for one packet, in append order.
+
+    The store is append-only, so the last matching line is the latest attempt.
+    AC7 is "at export time": a later successful replay supersedes an earlier
+    mismatch, and a stale mismatch must not block forever.
+    """
+    if not packet_id:
+        return None
+    rows = [row for row in read_rows(store_path) if row.get("packet_id") == packet_id]
+    return rows[-1] if rows else None
+
+
+def recorded_mismatch(row: dict[str, Any] | None) -> bool:
+    """True only for a recorded replay mismatch.
+
+    ``state`` is the one field that names this outcome. Neither exit code can be
+    used: the replay process's own ``exit_code`` is 0 when the replay ran and the
+    denominator disagreed, and the portal's ``rc`` is ``EXIT_REFUSED`` (4) for
+    *both* ``mismatch`` and ``refused`` - reading ``rc`` here would block an
+    export because the pin was rejected, which is a different finding.
+    """
+    return bool(row) and row.get("state") == "mismatch"
