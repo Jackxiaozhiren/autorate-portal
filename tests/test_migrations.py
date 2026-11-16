@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, inspect
 from autorate_portal import db
 
 ROOT = Path(__file__).resolve().parents[1]
-TABLES = tuple(db.SECTION_4_3) + ("audit_row",)
+TABLES = tuple(db.SECTION_4_3) + ("audit_row", "monitor_schedule")
 
 
 def _config(url: str) -> Config:

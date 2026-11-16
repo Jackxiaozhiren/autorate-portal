@@ -22,11 +22,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import (auth, badge as badge_module, claims as claims_module, db,
-               exports as exports_module, i18n, policies as policies_module,
-               records as records_module, trend as trend_module)
+               exports as exports_module, i18n, monitor as monitor_module,
+               policies as policies_module, records as records_module,
+               trend as trend_module)
 from .engine import deciding_row
 from .ingest import (ingest as ingest_bundle, load_stored, packet_store,
-                     provenance as provenance_of)
+                     provenance as provenance_of, stored_bundle)
 from .manifest import sha256_bytes
 from .views import (certificate_panel, packet_header, slice_companion, slice_context,
                     slice_rows, slice_view)
@@ -96,7 +97,11 @@ def _evidence_context(session: Session, store_dir: Path, who: auth.Principal,
 
 def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None = None,
                secret_key: str | None = None,
-               run_store: Path | None = None) -> FastAPI:
+               run_store: Path | None = None,
+               monitor_env=None, monitor_registry: Path | None = None) -> FastAPI:
+    """``monitor_env`` is a test seam: a replay environment the suite injects so a
+    monitor test does not spend a real container. Production leaves it None and
+    the engine probes the machine."""
     engine = engine or db.make_engine()
     sessions = db.make_session(engine)
     app = FastAPI(title="autorate portal", version="0.1.0")
@@ -112,6 +117,11 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         os.environ.get("AUTORATE_RUN_STORE") or (app.state.store_dir / "runs.jsonl"))
     app.state.salt = salt or os.environ.get("AUTHORATE_TOKEN_SALT") or DEFAULT_SALT
     app.state.secret_key = secret_key or os.environ.get("AUTHORATE_SECRET_KEY") or "dev-only"
+    app.state.monitor_env = monitor_env
+    # The registry a deployment replays against. The packaged pins are the
+    # default; pointing this at another file is a reviewed deployment choice,
+    # not something a request body may choose.
+    app.state.monitor_registry = monitor_registry
 
     def session_dependency() -> Session:
         with sessions() as session:
@@ -402,6 +412,51 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
             return Response(content=badge.svg, media_type="image/svg+xml")
         return Response(content=badge.raw, media_type="application/json",
                         headers={"x-badge-sha256": badge.record["badge_sha256"]})
+
+    @app.post("/api/v1/monitors", status_code=202)
+    def start_monitor(body: dict, session: Session = Depends(session_dependency),
+                      who: auth.Principal = Depends(principal)) -> dict:
+        """F6: schedule a replay and record one observation.
+
+        The frequency is stored per project (`monitor_schedule`); the verdict is
+        the CLI's own exit code. Nothing here reads or writes a summary.
+        """
+        try:
+            packet_id, frequency = monitor_module.parse_schedule_body(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        guard(who, auth.START_REPLAY, session, action="monitor.run",
+              target="packet:%s" % packet_id)
+        packet = _packet_for(session, who, packet_id)
+        bundle = stored_bundle(app.state.store_dir, packet.manifest_sha256)
+        if not bundle.is_file():
+            raise HTTPException(status_code=503, detail="the packet store cannot produce this bundle")
+        try:
+            monitor_module.set_schedule(session, project_id=who.project_id,
+                                        packet_id=packet.id, frequency=frequency)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        outcome = monitor_module.observe(
+            session, project_id=who.project_id, packet_path=bundle,
+            store_path=app.state.run_store, backend=str(body.get("backend") or "container"),
+            env=app.state.monitor_env, registry_path=app.state.monitor_registry)
+        auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                          action="monitor.run", target="packet:%s" % packet.id)
+        session.commit()
+        return {**outcome.as_dict(), "frequency": frequency}
+
+    @app.get("/api/v1/monitors")
+    def read_monitors(session: Session = Depends(session_dependency),
+                      who: auth.Principal = Depends(principal)) -> dict:
+        """F6: the series and the schedule, both scoped to the caller's project."""
+        auth.require(who, auth.READ_CERTIFICATES)
+        schedule = monitor_module.schedule_for(session, who.project_id)
+        return {"schedule": (None if schedule is None else
+                             {"packet_id": schedule.packet_id, "frequency": schedule.frequency,
+                              "updated_at": schedule.updated_at}),
+                "results": monitor_module.results_for(session, who.project_id,
+                                                      app.state.run_store),
+                "verdicts": list(monitor_module.VERDICTS)}
 
     @app.get("/api/v1/i18n/{locale}")
     def messages(locale: str) -> dict[str, str]:

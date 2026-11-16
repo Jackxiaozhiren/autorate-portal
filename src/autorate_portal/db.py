@@ -173,12 +173,36 @@ class Policy(Base):
 
 
 class MonitorResult(Base):
+    """One observation. `project_id` is added by M5 for the same reason every
+    other read is scoped by a join: a monitor series must not be assemblable
+    across projects, and the run rows it points at live in a JSONL store that
+    carries no project at all."""
+
     __tablename__ = "monitor_result"
     id: Mapped[str] = _id()
+    project_id: Mapped[str] = mapped_column(String(32))
     run_id: Mapped[str] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"))
     verdict: Mapped[str] = mapped_column(String(32))
     drift_detail_artifact_id: Mapped[str | None] = mapped_column(
         ForeignKey("artifact.id"), nullable=True)
+
+
+class MonitorSchedule(Base):
+    """F6 rule 4: frequency is per project, and one schedule names one packet.
+
+    This table holds *when* to look, never *what was seen* - the observations are
+    `monitor_result` rows. Keeping them apart is what lets a schedule be edited
+    without rewriting history, and it is why a monitor run can write a run and a
+    result and still leave every certificate summary byte-identical.
+    """
+
+    __tablename__ = "monitor_schedule"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_monitor_schedule_project"),)
+    id: Mapped[str] = _id()
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id", ondelete="CASCADE"))
+    packet_id: Mapped[str] = mapped_column(String(32))
+    frequency: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[str] = mapped_column(String(40))
 
 
 class User(Base):

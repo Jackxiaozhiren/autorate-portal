@@ -63,6 +63,7 @@ class RunRow:
     exit_code: int | None
     started_at: str
     stdout_sha256: str
+    summary_line: str
     state: str
     rc: int
     reason: str
@@ -85,6 +86,7 @@ class RunRow:
             "exit_code": self.exit_code,
             "started_at": self.started_at,
             "stdout_sha256": self.stdout_sha256,
+            "summary_line": self.summary_line,
             "state": self.state,
             "rc": self.rc,
             "reason": self.reason,
@@ -129,7 +131,7 @@ def classify(outcome) -> str:
 
 def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
          argv: list[str], command: list[str], exit_code: int | None, started_at: str,
-         stdout_sha256: str,
+         stdout_sha256: str, summary_line: str = "",
          state: str, reason: str, digest_stored: str, digest_replayed: str,
          denominator_stored: str, denominator_replayed: str, image: str = "",
          refusals: list[Refusal] | None = None) -> RunRow:
@@ -145,7 +147,7 @@ def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
         packet_id=packet_id, backend=backend, image=image, distribution=distribution,
         wheel_sha256=wheel_sha256, argv=list(argv), command=list(command),
         exit_code=exit_code, started_at=started_at, stdout_sha256=stdout_sha256,
-        state=state,
+        summary_line=summary_line, state=state,
         rc=STATE_RC[state], reason=reason, digest_stored=digest_stored,
         digest_replayed=digest_replayed, denominator_stored=denominator_stored,
         denominator_replayed=denominator_replayed, refusals=list(refusals or []))
@@ -208,7 +210,7 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
     row = _row(packet_id=manifest.packet_id, backend=backend, distribution=pin.specifier,
                wheel_sha256=pin.sha256, argv=outcome.argv, command=outcome.command,
                exit_code=outcome.exit_code, started_at=started_at,
-               stdout_sha256=outcome.stdout_sha256,
+               stdout_sha256=outcome.stdout_sha256, summary_line=outcome.summary_line,
                state=state, reason=reason, digest_stored=manifest.manifest_sha256,
                digest_replayed=outcome.stdout_sha256,
                denominator_stored=manifest.expected_rederived,

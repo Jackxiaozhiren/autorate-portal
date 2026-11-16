@@ -36,10 +36,19 @@ def _packet(session, *, org="org-1", project="prj-1", manifest="a" * 64, path="p
 def test_every_section_4_3_table_exists_with_exactly_its_columns():
     engine, _ = _session()
     actual = set(inspect(engine).get_table_names())
-    assert actual == set(db.SECTION_4_3) | {"audit_row"}, "audit_row is Section 4.4's, not 4.3's"
+    assert actual == set(db.SECTION_4_3) | {"audit_row", "monitor_schedule"}, (
+        "audit_row is Section 4.4's and monitor_schedule is M5's F6 addition; "
+        "neither is a Section 4.3 table")
     for table, expected in db.SECTION_4_3.items():
         columns = {column["name"] for column in inspect(engine).get_columns(table)}
-        assert columns == set(expected), table
+        wanted = set(expected)
+        if table == "monitor_result":
+            # M5 F6: the series is scoped by a column, not by a join into a
+            # run store that carries no project. SECTION_4_3 stays the PRD's
+            # literal text; naming the extension here keeps it from being
+            # added silently, which is the drift this test exists to catch.
+            wanted |= {"project_id"}
+        assert columns == wanted, table
 
 
 def test_a_bound_is_stored_as_text_so_it_cannot_be_averaged_by_accident():

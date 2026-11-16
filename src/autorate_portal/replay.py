@@ -24,6 +24,8 @@ from . import EXIT_NOT_RUN, EXIT_OK, EXIT_REFUSED
 from .packet import Refusal, Verification, read_bundle, verify_bundle
 
 REDERIVED_LINE = re.compile(r"re-derived\s+([0-9]+)\s*/([0-9]+)\s+values")
+SUMMARY_LINE = re.compile(r"^re-derived\s+[0-9]+\s*/[0-9]+\s+values$")
+DRIFT_LINE = re.compile(r"^DRIFT:")
 PYPI_JSON = "https://pypi.org/pypi/autorate/json"
 INNER_COMMAND = ["verify", "--protocol", "protocol.json"]
 CONTAINER_PROBE = ["python", "-c",
@@ -62,6 +64,7 @@ class ReplayOutcome:
     digest_then: str = ""
     packet_id_in: str = ""
     rederived: str = ""
+    summary_line: str = ""
     expected: str = ""
     disagrees: bool = False
     refusals: list[Refusal] = field(default_factory=list)
@@ -77,7 +80,24 @@ class ReplayOutcome:
         return {"argv": self.argv, "command": self.command, "exit_code": self.exit_code,
                 "stdout_sha256": self.stdout_sha256, "digest_then": self.digest_then,
                 "packet_id_in": self.packet_id_in, "state": self.state,
-                "disagrees": self.disagrees}
+                "disagrees": self.disagrees, "summary_line": self.summary_line}
+
+
+def summary_line(stdout: str) -> str:
+    """The tool's own last word, quoted rather than paraphrased (F6 rule 3).
+
+    `re-derived N /M values` is the line `verify` prints whether it holds or
+    drifts; a run that drifted also prints `DRIFT:` on stderr, which a monitor
+    surfaces separately. The first matching line wins, so a wrapper that echoes
+    the command cannot displace the result.
+    """
+    for line in stdout.splitlines():
+        if SUMMARY_LINE.match(line.strip()):
+            return line.strip()
+    for line in stdout.splitlines():
+        if DRIFT_LINE.match(line.strip()):
+            return line.strip()
+    return ""
 
 
 def probe_container_network(image: str,
@@ -262,13 +282,25 @@ def verify_packet(packet_path: Path, env: Environment,
                                                          wheel, runner)
             else:
                 argv, stdout, exit_code = _run_uv(work, wheel, manifest.distribution.wheel, runner)
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired as exc:
+            # F6 exception (b): a replay that exceeded its budget did not observe
+            # anything. The partial stdout is hashed so the record says what the
+            # attempt had printed when it was cut off, and the state is not-run.
+            partial = exc.stdout or b""
+            if isinstance(partial, bytes):
+                partial = partial.decode("utf-8", "replace")
+            return ReplayOutcome("not-run", EXIT_NOT_RUN,
+                                 "replay exceeded its timeout: %s" % exc,
+                                 stdout_sha256=hashlib.sha256(
+                                     partial.encode("utf-8", "replace")).hexdigest(),
+                                 **base)
+        except OSError as exc:
             return ReplayOutcome("not-run", EXIT_NOT_RUN,
                                  "replay runner failed: %s" % exc, **base)
 
     stdout_hash = hashlib.sha256(stdout.encode("utf-8", "replace")).hexdigest()
     ran = {"argv": argv, "command": list(INNER_COMMAND), "exit_code": exit_code,
-           "stdout_sha256": stdout_hash}
+           "stdout_sha256": stdout_hash, "summary_line": summary_line(stdout)}
     if exit_code != 0:
         return ReplayOutcome("refused", EXIT_REFUSED,
                              "replay exited %d; a failed replay is not a pass" % exit_code,

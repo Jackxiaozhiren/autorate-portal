@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from . import EXIT_OK, EXIT_REFUSED, EXIT_USAGE, __version__
+from . import monitor as monitor_module
 from .doctor import examine, exit_code as doctor_exit, render as render_doctor
 from .engine import append_row, find_row, read_rows, run as run_job
 from .html import render
@@ -144,6 +145,31 @@ def cmd_run(args) -> int:
     return row.rc
 
 
+def cmd_monitor(args) -> int:
+    """F6: one scheduled observation, with the tool's own verdict.
+
+    The CLI writes the engine's run row and prints the verdict; the database row
+    belongs to the API, which owns a session. The exit code is the *verdict's*
+    code (0/3/4/2), so a scheduler can treat a monitor exactly as it treats the
+    tool itself rather than inventing a second scale.
+    """
+    outcome = monitor_module.observe(
+        None, project_id="", packet_path=Path(args.packet),
+        store_path=Path(args.runs) if args.runs else None,
+        backend=args.backend,
+        registry_path=Path(args.registry) if args.registry else None)
+    print("verdict          : %s" % outcome.verdict)
+    print("reason           : %s" % outcome.reason)
+    print("run_id           : %s" % outcome.run_id)
+    print("exit_code        : %s" % json.dumps(outcome.exit_code))
+    print("stdout_sha256    : %s" % outcome.stdout_sha256)
+    if outcome.summary_line:
+        print("summary_line     : %s" % outcome.summary_line)
+    for line in outcome.doctor:
+        print(line)
+    return monitor_module.VERDICT_RC[outcome.verdict]
+
+
 def cmd_runs_list(args) -> int:
     rows = read_rows(Path(args.runs))
     if not rows:
@@ -220,6 +246,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="append the run row to this JSONL store "
                         "(default: $AUTORATE_RUN_STORE, the same variable the app reads)")
     j.set_defaults(fn=cmd_run)
+
+    m = sub.add_parser("monitor", help="one scheduled replay with a named verdict (F6)")
+    m.add_argument("packet")
+    m.add_argument("--backend", choices=("container", "uv"), default="container")
+    m.add_argument("--image", default="python:3.13-slim")
+    m.add_argument("--registry", default=None)
+    m.add_argument("--runs", default=os.environ.get("AUTORATE_RUN_STORE"),
+                   help="append the run row to this JSONL store")
+    m.set_defaults(fn=cmd_monitor)
 
     runs = sub.add_parser("runs", help="inspect recorded run rows")
     rsub = runs.add_subparsers(dest="runs_command", required=True)
