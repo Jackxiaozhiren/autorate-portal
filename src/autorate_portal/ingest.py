@@ -93,6 +93,14 @@ def summary_fields(manifest: Manifest, path: str, data: bytes) -> dict[str, Any]
     bound = document.get("conditional_error_bound")
     if bound is None:
         bound = document.get("marginal_error_bound")
+    if bound is None:
+        # W-F1: `data/cert_severity_ordinal.json` publishes its bound under the
+        # plain key `bound`, beside no unit at all. Reading only the two
+        # slice-shaped keys made the portal say "not published by this
+        # certificate" about a number the artefact carries, which is the
+        # opposite of an honest absence. The third shape is read, and the unit
+        # stays absent rather than being guessed.
+        bound = document.get("bound")
     return {
         # The artefact carries no task field; its own filename is the stable,
         # published name for it, so the label is read rather than invented.
@@ -102,8 +110,12 @@ def summary_fields(manifest: Manifest, path: str, data: bytes) -> dict[str, Any]
         "reason": document.get("reason"),
         "autorate": _text(document.get("autorate")),
         "bound": _text(bound),
-        "bound_unit": _text(at_alpha.get("bound_unit") or meta.get("bound_unit")
-                            or manifest.bound_unit) if bound is not None else None,
+        # The unit is read from the artefact only. The packet manifest carries the
+        # protocol's rubric unit, and using it as a fallback would put a unit this
+        # certificate never stated beside its digits - W-F1's second half. When
+        # the artefact states none, the field stays NULL and the view says so.
+        "bound_unit": _text(at_alpha.get("bound_unit") or meta.get("bound_unit"))
+        if bound is not None else None,
         "n_cal": document.get("n_cal"),
         "n_eval": document.get("n_eval"),
         "n_claims": document.get("n_claims"),
@@ -252,8 +264,13 @@ def ingest(session: Session, *, bundle_path: Path, project_id: str, actor: str,
         session.add(artifact_row)
         session.flush()
         if artefact.kind == "certificate":
-            db.record_summary(session, artifact_id=artifact_row.id,
-                              fields=summary_fields(manifest, artefact.path, files[artefact.path]))
+            fields = summary_fields(manifest, artefact.path, files[artefact.path])
+            # W-F1: the artefact may publish a bound and no unit. That absence is
+            # the artefact's, not a caller's omission, so the row stores the
+            # digits and `emit` refuses to render them without the unit.
+            db.record_summary(session, artifact_id=artifact_row.id, fields=fields,
+                              unit_absent_in_artefact=(fields.get("bound") is not None
+                                                       and not fields.get("bound_unit")))
 
     record_audit(session, actor=actor, project_id=project_id, action="packet.ingest",
                  target="packet:%s" % row_id, outcome="allowed", now=None)

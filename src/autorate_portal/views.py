@@ -116,7 +116,7 @@ def certificate_panel(*, summary: db.CertificateSummary, packet: db.Packet,
     return Panel(title, CERTIFIED, "", "".join(chunks), tuple(numbers))
 
 
-def slice_rows(document: dict[str, Any]) -> list[dict[str, Any]]:
+def slice_rows(document: dict[str, Any], *, source_path: str = "") -> list[dict[str, Any]]:
     """F3 rule 2: the rows the artefact itself declares.
 
     Two published shapes exist in the frozen repository. The fixtures and the
@@ -125,10 +125,16 @@ def slice_rows(document: dict[str, Any]) -> list[dict[str, Any]]:
     ``feasible``/``reason``/``envelope``. Reading only the first shape made a
     real artefact look as if it had published no slices at all, which is the
     opposite of what it says - so both are read, and neither is inferred.
+
+    Every row also carries the artefact it came from and that artefact's own
+    backend (W-F2). The detail endpoint attaches a packet's slice document to
+    whichever certificate is opened, and without these two fields a reader
+    cannot tell whose groups - and whose denominator - the panel is showing.
     """
+    source = {"source_path": source_path, "source_backend": document.get("backend")}
     declared = document.get("slices")
     if declared:
-        return [dict(row) for row in declared]
+        return [dict(row, **source) for row in declared]
 
     run = document.get("run") or {}
     per_group = run.get("per_group") or {}
@@ -160,7 +166,8 @@ def slice_rows(document: dict[str, Any]) -> list[dict[str, Any]]:
                      "envelope": group.get("envelope") or [],
                      "bound": bound, "autorate": group.get("autorate"),
                      "rubric": rubric,
-                     "bound_unit": (group.get("meta") or {}).get("bound_unit")})
+                     "bound_unit": (group.get("meta") or {}).get("bound_unit"),
+                     **source})
     return rows
 
 
@@ -231,10 +238,32 @@ def slice_view(*, pooled: Panel, companion: Panel | None,
                document: dict[str, Any], cap: int = SLICE_CAP,
                context: dict[str, Any] | None = None,
                locale: str = i18n.DEFAULT_LOCALE) -> dict[str, Any]:
-    """F3: pooled and companion side by side, every number with its own n."""
-    rows = slice_rows(document)
+    """F3: pooled and companion side by side, every number with its own n.
+
+    W-F2: the rows are read from a named artefact and carry that artefact's own
+    backend. When the artefact's backend differs from the certificate the reader
+    opened, the panel says so before the first row - the two are different
+    populations, and a shared denominator would be a claim neither published.
+    """
+    context = context or {}
+    rows = slice_rows(document, source_path=str(context.get("source_path") or ""))
     notes: list[str] = []
     body: list[str] = []
+
+    source_backend = next((row.get("source_backend") for row in rows
+                           if row.get("source_backend")), None)
+    viewed_backend = context.get("viewed_backend")
+    provenance = str(context.get("source_path") or "")
+    if rows and source_backend:
+        line = i18n.t(locale, "text.slice_source",
+                      path=provenance or i18n.t(locale, "text.slice_source_unnamed"),
+                      backend=source_backend)
+        body.append('<p class="provenance">%s</p>' % e(line))
+        if viewed_backend and viewed_backend != source_backend:
+            mismatch = i18n.t(locale, "text.slice_backend_mismatch",
+                              source=source_backend, viewed=viewed_backend)
+            notes.append(mismatch)
+            body.append('<p class="note backend-mismatch">%s</p>' % e(mismatch))
 
     if companion is None:
         notes.append(i18n.t(locale, "text.no_slice_evidence"))

@@ -261,17 +261,27 @@ def create_all(engine: Engine) -> None:
     Base.metadata.create_all(engine)
 
 
-def record_summary(session: Session, *, artifact_id: str, fields: dict[str, Any]) -> CertificateSummary:
+def record_summary(session: Session, *, artifact_id: str, fields: dict[str, Any],
+                   unit_absent_in_artefact: bool = False) -> CertificateSummary:
     """The only writer for ``certificate_summary``.
 
     It copies. It does not combine, average, or fill: a field absent from
     ``fields`` stays NULL and the view renders it as absent, and a bound without
     the unit the artefact printed beside it is refused rather than guessed.
+
+    ``unit_absent_in_artefact`` is the one exception, and it is narrow: the
+    caller states that it read the artefact and the artefact published a bound
+    with no unit (W-F1's shape, ``data/cert_severity_ordinal.json``). The digits
+    are stored because they are the artefact's; the unit stays NULL, so
+    :func:`autorate_portal.emit.statistic` still refuses to turn them into a
+    displayed number. A caller that cannot point at published bytes leaves the
+    flag False and the old refusal applies.
     """
     unknown = sorted(set(fields) - set(SUMMARY_FIELDS))
     if unknown:
         raise ValueError("not a certificate_summary column: %s" % ", ".join(unknown))
-    if fields.get("bound") is not None and not fields.get("bound_unit"):
+    if (fields.get("bound") is not None and not fields.get("bound_unit")
+            and not unit_absent_in_artefact):
         raise ValueError("a bound without its unit is not a certificate value")
     summary = CertificateSummary(artifact_id=artifact_id, **fields)
     session.add(summary)

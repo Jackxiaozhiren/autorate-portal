@@ -245,10 +245,12 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         locale = _locale(request)
         panel = certificate_panel(summary=summary, packet=packet, rubric=stored.manifest.rubric,
                                   certificate=document, locale=locale)
-        slices_document = _slice_document(packet, stored, document)
+        slices_document, slices_path = _slice_document(packet, stored, document)
         view = slice_view(pooled=panel, companion=slice_companion(slices_document, locale),
                           document=slices_document,
-                          context=slice_context(stored.manifest, slices_document),
+                          context={**slice_context(stored.manifest, slices_document),
+                                   "source_path": slices_path,
+                                   "viewed_backend": summary.backend},
                           locale=locale)
         return {"certificate": panel.title, "state": panel.state, "reason": panel.reason,
                 "html": view["html"], "notes": list(view["notes"])}
@@ -380,8 +382,8 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     return app
 
 
-def _slice_document(packet: db.Packet, stored, certificate: dict) -> dict:
-    """The document F3 should read: the certificate's own slices, or the packet's.
+def _slice_document(packet: db.Packet, stored, certificate: dict) -> tuple[dict, str]:
+    """The document F3 should read, and the path a reader can check.
 
     F3 is a per-packet question ("does the working average hide a failing
     group?"), and the frozen repository publishes its groups in a separate
@@ -390,9 +392,12 @@ def _slice_document(packet: db.Packet, stored, certificate: dict) -> dict:
     that publishes four groups. The artefact is found by asking each document in
     the packet whether it carries slice rows - no file-name guessing, and a
     packet with none still answers with what it has.
+
+    The path travels with the document (W-F2): the panel names where the rows
+    came from, and `viewed_backend` lets it say when they are another backend's.
     """
     if slice_rows(certificate):
-        return certificate
+        return certificate, ""
     for artifact in sorted(packet.artifacts, key=lambda row: row.path):
         if artifact.kind != "document":
             continue
@@ -401,8 +406,8 @@ def _slice_document(packet: db.Packet, stored, certificate: dict) -> dict:
         except (KeyError, ValueError):
             continue
         if slice_rows(document):
-            return document
-    return certificate
+            return document, artifact.path
+    return certificate, ""
 
 
 def _packet_for(session: Session, who: auth.Principal, packet_id: str) -> db.Packet:

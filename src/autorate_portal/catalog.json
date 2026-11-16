@@ -95,7 +95,10 @@
     "msg.export_blocked_replay": "export blocked: a replay run recorded that the source no longer re-derives; run id: {run_id}",
     "msg.no_run_row": "no replay row records a mismatch at export time; the stored digest is the evidence",
     "msg.stale": "packet superseded by protocol_digest {digest}",
-    "msg.audit_lane_quoted": "the audit lane is quoted, not parsed into a bound"
+    "msg.audit_lane_quoted": "the audit lane is quoted, not parsed into a bound",
+    "text.slice_source": "source artefact: {path} (backend: {backend})",
+    "text.slice_source_unnamed": "(unnamed artefact)",
+    "text.slice_backend_mismatch": "these groups were published by backend {source}, not by this certificate's backend {viewed}; their denominators are that artefact's, not this certificate's"
   },
   "zh-Hans": {
     "app.title": "autorate portal",
@@ -193,6 +196,9 @@
     "msg.export_blocked_replay": "导出被阻止：一次重放运行记录了源产物不再可复现；运行标识：{run_id}",
     "msg.no_run_row": "导出时没有任何重放记录报告不匹配；存储摘要本身即为证据",
     "msg.stale": "证据包已被 protocol_digest {digest} 取代",
-    "msg.audit_lane_quoted": "审计泳道被逐字引用，而非解析成风险上界"
+    "msg.audit_lane_quoted": "审计泳道被逐字引用，而非解析成风险上界",
+    "text.slice_source": "来源文件：{path}（后端：{backend}）",
+    "text.slice_source_unnamed": "（未命名的文件）",
+    "text.slice_backend_mismatch": "这些分组由后端 {source} 发布，并非本证书的后端 {viewed}；其分母属于该文件，不属于本证书"
   }
 }

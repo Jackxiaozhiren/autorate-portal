@@ -184,10 +184,14 @@ def test_the_slice_surface_reads_the_packets_slices_artefact_not_only_the_certif
     stored = SimpleNamespace(files={"data/cert_laya.json": b"{}",
                                     "data/slices_language.json": json.dumps(slices).encode()})
 
-    assert _slice_document(packet, stored, {}) == slices
+    document, path = _slice_document(packet, stored, {})
+    assert document == slices
+    assert path == "data/slices_language.json", "W-F2: the panel must be able to name its source"
 
     own = {"slices": [{"key": "lang", "value": "de", "n_cal": 5, "n_eval": 5}]}
-    assert _slice_document(packet, stored, own) is own, "a certificate's own slices win"
+    document, path = _slice_document(packet, stored, own)
+    assert document is own, "a certificate's own slices win"
+    assert path == "", "and they come from the certificate, not from a document artefact"
 
 
 def test_the_single_page_client_is_served_by_the_same_process(tmp_path):
