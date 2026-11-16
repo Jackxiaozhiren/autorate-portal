@@ -64,7 +64,8 @@ def test_an_active_policy_stays_active_even_with_strict():
         payload = policies.sdk_payload(session, "pol-1", strict=True)
     assert payload.state == policies.ACTIVE
     assert payload.strict_conflict is False
-    assert "action/label arrive with F7" in payload.body["sdk_shape"]
+    assert "action/label decisions are published per slice" in payload.body["sdk_shape"]
+    assert payload.body["decisions"] == [], "an M4-shaped policy has no decisions yet"
 
 
 def test_an_unknown_policy_or_a_missing_packet_is_a_named_refusal():

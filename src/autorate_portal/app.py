@@ -372,6 +372,55 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         return Response(content=bundle.raw, media_type="application/json",
                         headers={"x-bundle-sha256": bundle.bundle_sha256})
 
+    @app.post("/api/v1/policies", status_code=201)
+    def create_policy(body: dict, session: Session = Depends(session_dependency),
+                      who: auth.Principal = Depends(principal)) -> dict:
+        """F7 rule 1/5: a policy names a packet and a budget the artefact published."""
+        guard(who, auth.EDIT_POLICY, session, action="policy.create",
+              target="packet:%s" % str(body.get("packet_id") or ""))
+        packet_id = str(body.get("packet_id") or "")
+        packet = _packet_for(session, who, packet_id)
+        stored = load_stored(app.state.store_dir, packet.manifest_sha256)
+        if stored is None:
+            raise HTTPException(status_code=503, detail="the packet store cannot produce this bundle")
+        try:
+            policy = policies_module.create_policy(
+                session, project_id=who.project_id, name=str(body.get("name") or ""),
+                packet_id=packet.id, budget=str(body.get("budget") or ""),
+                slices=body.get("slices"), files=stored.files, actor=who.actor)
+        except (policies_module.BudgetNotPublished,
+                policies_module.SliceNotInArtefact) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        session.commit()
+        return {"id": policy.id, "version": policy.version, "state": policy.state,
+                "packet_id": policy.packet_id}
+
+    @app.post("/api/v1/policies/{policy_id}/edit")
+    def edit_policy(policy_id: str, body: dict,
+                    session: Session = Depends(session_dependency),
+                    who: auth.Principal = Depends(principal)) -> dict:
+        """F7 rule 4: editing inserts a version; the old row is kept."""
+        guard(who, auth.EDIT_POLICY, session, action="policy.edit",
+              target="policy:%s" % policy_id)
+        old = session.get(db.Policy, policy_id)
+        if old is None or old.project_id != who.project_id:
+            raise HTTPException(status_code=404, detail="no policy %s" % policy_id)
+        packet = _packet_for(session, who, old.packet_id)
+        stored = load_stored(app.state.store_dir, packet.manifest_sha256)
+        if stored is None:
+            raise HTTPException(status_code=503, detail="the packet store cannot produce this bundle")
+        try:
+            new = policies_module.edit_policy(
+                session, policy_id=policy_id, files=stored.files, actor=who.actor,
+                budget=None if body.get("budget") is None else str(body["budget"]),
+                slices=body.get("slices"))
+        except (policies_module.BudgetNotPublished,
+                policies_module.SliceNotInArtefact) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        session.commit()
+        return {"id": new.id, "version": new.version, "state": new.state,
+                "supersedes": new.supersedes}
+
     @app.get("/api/v1/policies/{policy_id}.well-known")
     def well_known_policy(policy_id: str, request: Request,
                           session: Session = Depends(session_dependency)) -> JSONResponse:

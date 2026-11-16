@@ -98,7 +98,8 @@
     "msg.audit_lane_quoted": "the audit lane is quoted, not parsed into a bound",
     "text.slice_source": "source artefact: {path} (backend: {backend})",
     "text.slice_source_unnamed": "(unnamed artefact)",
-    "text.slice_backend_mismatch": "these groups were published by backend {source}, not by this certificate's backend {viewed}; their denominators are that artefact's, not this certificate's"
+    "text.slice_backend_mismatch": "these groups were published by backend {source}, not by this certificate's backend {viewed}; their denominators are that artefact's, not this certificate's",
+    "msg.stale_drift": "a monitor reported drift on this policy's packet"
   },
   "zh-Hans": {
     "app.title": "autorate portal",
@@ -199,6 +200,7 @@
     "msg.audit_lane_quoted": "审计泳道被逐字引用，而非解析成风险上界",
     "text.slice_source": "来源文件：{path}（后端：{backend}）",
     "text.slice_source_unnamed": "（未命名的文件）",
-    "text.slice_backend_mismatch": "这些分组由后端 {source} 发布，并非本证书的后端 {viewed}；其分母属于该文件，不属于本证书"
+    "text.slice_backend_mismatch": "这些分组由后端 {source} 发布，并非本证书的后端 {viewed}；其分母属于该文件，不属于本证书",
+    "msg.stale_drift": "监测发现该策略所依据的数据包出现漂移"
   }
 }

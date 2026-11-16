@@ -52,7 +52,7 @@ SECTION_4_3: dict[str, tuple[str, ...]] = {
     "run": ("id", "project_id", "argv", "exit_code", "started_at", "digest_then",
             "stdout_sha256", "packet_id_in"),
     "policy": ("id", "project_id", "name", "packet_id", "slices", "budget", "state",
-               "stale_because"),
+               "stale_because", "version", "supersedes"),
     "monitor_result": ("id", "run_id", "verdict", "drift_detail_artifact_id"),
     "user": ("id", "email", "display"),
     "membership": ("user_id", "org_id", "role"),
@@ -170,6 +170,10 @@ class Policy(Base):
     budget: Mapped[str] = mapped_column(Text)
     state: Mapped[str] = mapped_column(String(16))
     stale_because: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # F7 rule 4: editing a policy creates a version, nothing is overwritten.
+    # `supersedes` points at the previous row's id; version 1 has none.
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    supersedes: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class MonitorResult(Base):
