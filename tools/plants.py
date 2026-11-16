@@ -120,7 +120,9 @@ PLANTS: tuple[Plant, ...] = (
           '        state = "NOT_CERTIFIABLE" if reason else "NOT_INFORMATIVE"',
           '        state = "0"',
           "tests/test_html.py::test_refusal_renders_verbatim_and_never_as_zero"),
-    Plant("html-exclusion-disclosure", "html.py",
+    # M5/F9 moved the document into render.py (one renderer, two targets);
+    # retarget the plant at the file that now owns the disclosure (section 6.2).
+    Plant("html-exclusion-disclosure", "render.py",
           "records artefacts are excluded and named ",
           "records artefacts were dropped and named ",
           "tests/test_html.py::test_never_embeds_records_rows_and_states_exclusion"),
@@ -297,9 +299,13 @@ PLANTS: tuple[Plant, ...] = (
           '                                 component=i18n.t(locale, "label.feasible"))))',
           '                                 component=i18n.t("en", "label.feasible"))))',
           "tests/test_views_locale.py::test_the_panel_body_is_in_the_requested_language_not_only_the_header"),
+    # M5/F7 rewrote sdk_payload to add drift staleness and F7 decisions. The
+    # guard moved from a one-line conditional into the supersession branch;
+    # retarget the plant at that branch rather than dropping it (section 6.2:
+    # a plant whose precondition no longer holds is rewritten, not deleted).
     Plant("m4-ac11-staleness-swallowed", "policies.py",
-          "    state = STALE if newer is not None else ACTIVE",
-          "    state = ACTIVE if newer is not None else ACTIVE",
+          "    if newer is not None:\n        state = STALE\n",
+          "    if newer is not None:\n        state = ACTIVE\n",
           "tests/test_policies.py::test_ac11_a_superseded_packet_is_stale_in_the_sdk_payload"),
 )
 
