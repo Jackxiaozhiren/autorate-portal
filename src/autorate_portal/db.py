@@ -44,7 +44,7 @@ SECTION_4_3: dict[str, tuple[str, ...]] = {
     "project": ("id", "org_id", "name"),
     "packet": ("id", "project_id", "manifest_sha256", "protocol_digest", "source_version",
                "source_sha256", "source_revision", "created_by", "ingested_at", "bytes",
-               "retention_until"),
+               "retention_until", "tombstoned"),
     "artifact": ("id", "packet_id", "path", "sha256", "kind"),
     "certificate_summary": ("id", "artifact_id", "task", "backend", "feasible", "reason",
                             "autorate", "bound", "bound_unit", "n_cal", "n_eval", "n_claims",
@@ -106,6 +106,9 @@ class Packet(Base):
     ingested_at: Mapped[str] = mapped_column(String(40))
     bytes: Mapped[int] = mapped_column(Integer)
     retention_until: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # F10 deletion is a tombstone plus byte removal: the row stays so the id can
+    # never be silently re-issued, but the stored packet bytes are gone.
+    tombstoned: Mapped[int] = mapped_column(Integer, default=0)
     artifacts: Mapped[list["Artifact"]] = relationship(back_populates="packet")
 
 

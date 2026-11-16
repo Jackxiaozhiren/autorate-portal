@@ -23,7 +23,8 @@ from sqlalchemy.orm import Session
 
 import time
 
-from . import (auth, badge as badge_module, claims as claims_module, db,
+from . import (admin as admin_module, auth, badge as badge_module,
+               claims as claims_module, db,
                exports as exports_module, i18n, monitor as monitor_module,
                policies as policies_module, records as records_module,
                render as render_module, share as share_module,
@@ -101,7 +102,8 @@ def _evidence_context(session: Session, store_dir: Path, who: auth.Principal,
 def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None = None,
                secret_key: str | None = None,
                run_store: Path | None = None,
-               monitor_env=None, monitor_registry: Path | None = None) -> FastAPI:
+               monitor_env=None, monitor_registry: Path | None = None,
+               admin_registry: Path | None = None) -> FastAPI:
     """``monitor_env`` is a test seam: a replay environment the suite injects so a
     monitor test does not spend a real container. Production leaves it None and
     the engine probes the machine."""
@@ -125,6 +127,10 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     # default; pointing this at another file is a reviewed deployment choice,
     # not something a request body may choose.
     app.state.monitor_registry = monitor_registry
+    # F10: the operator's distribution registry. None means pin/upgrade is
+    # refused rather than writing the packaged pins.json — the deployment owns
+    # the registry, not this project.
+    app.state.admin_registry = admin_registry
 
     def session_dependency() -> Session:
         with sessions() as session:
@@ -509,6 +515,94 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
                 "results": monitor_module.results_for(session, who.project_id,
                                                       app.state.run_store),
                 "verdicts": list(monitor_module.VERDICTS)}
+
+    def _admin(who: auth.Principal, session: Session, action: str, target: str,
+               fn, *, capability: str = auth.MANAGE_MEMBERS) -> dict:
+        """One guard, one audit row, one commit for every admin write."""
+        guard(who, capability, session, action=action, target=target)
+        try:
+            result = fn()
+        except admin_module.AdminRefused as exc:
+            auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                              action=action, target=target, outcome="refused")
+            session.commit()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                          action=result.action, target=result.target)
+        session.commit()
+        return result.as_dict()
+
+    @app.get("/api/v1/admin/members")
+    def admin_members(session: Session = Depends(session_dependency),
+                      who: auth.Principal = Depends(principal)) -> dict:
+        guard(who, auth.MANAGE_MEMBERS, session, action="admin.members.list", target="org")
+        rows = session.scalars(select(db.Membership).join(
+            db.Org, db.Membership.org_id == db.Org.id)).all()
+        return {"members": [{"user_id": r.user_id, "org_id": r.org_id, "role": r.role}
+                            for r in rows]}
+
+    @app.post("/api/v1/admin/members")
+    def admin_set_member(body: dict, session: Session = Depends(session_dependency),
+                         who: auth.Principal = Depends(principal)) -> dict:
+        target = "user:%s" % str(body.get("user_id") or "")
+        return _admin(who, session, "admin.member.set", target,
+                      lambda: admin_module.set_member(
+                          session, org_id=str(body.get("org_id") or ""),
+                          user_id=str(body.get("user_id") or ""),
+                          role=str(body.get("role") or "")))
+
+    @app.get("/api/v1/admin/tokens")
+    def admin_tokens(session: Session = Depends(session_dependency),
+                     who: auth.Principal = Depends(principal)) -> dict:
+        guard(who, auth.MANAGE_MEMBERS, session, action="admin.tokens.list", target="project")
+        return {"tokens": admin_module.tokens_for(session, project_id=who.project_id)}
+
+    @app.post("/api/v1/admin/tokens/{token_id}/revoke")
+    def admin_revoke_token(token_id: str, session: Session = Depends(session_dependency),
+                           who: auth.Principal = Depends(principal)) -> dict:
+        return _admin(who, session, "admin.token.revoke", "token:%s" % token_id,
+                      lambda: admin_module.revoke_token(session, token_id=token_id))
+
+    @app.post("/api/v1/admin/packets/{packet_id}/retention")
+    def admin_retention(packet_id: str, body: dict,
+                        session: Session = Depends(session_dependency),
+                        who: auth.Principal = Depends(principal)) -> dict:
+        return _admin(who, session, "admin.retention.set", "packet:%s" % packet_id,
+                      lambda: admin_module.set_retention(
+                          session, packet_id=packet_id,
+                          retention_until=str(body.get("retention_until") or "")))
+
+    @app.post("/api/v1/admin/packets/{packet_id}/delete")
+    def admin_delete(packet_id: str, session: Session = Depends(session_dependency),
+                     who: auth.Principal = Depends(principal)) -> dict:
+        return _admin(who, session, "admin.packet.delete", "packet:%s" % packet_id,
+                      lambda: admin_module.tombstone(
+                          session, packet_id=packet_id, store_dir=app.state.store_dir))
+
+    @app.get("/api/v1/admin/audit")
+    def admin_audit(session: Session = Depends(session_dependency),
+                    who: auth.Principal = Depends(principal)) -> Response:
+        """F10: the audit log, exported as deterministic JSON (no records rows)."""
+        guard(who, auth.EXPORT_AUDIT, session, action="admin.audit.export", target="project")
+        rows = session.scalars(select(db.AuditRow).where(
+            db.AuditRow.project_id == who.project_id).order_by(db.AuditRow.at)).all()
+        payload = [{"id": r.id, "actor": r.actor, "project_id": r.project_id,
+                    "action": r.action, "target": r.target, "at": r.at,
+                    "outcome": r.outcome} for r in rows]
+        raw = (json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False) + "\n").encode("utf-8")
+        return Response(content=raw, media_type="application/json")
+
+    @app.post("/api/v1/admin/pins")
+    def admin_pin(body: dict, session: Session = Depends(session_dependency),
+                  who: auth.Principal = Depends(principal)) -> dict:
+        version = str(body.get("version") or "")
+        upgrade = body.get("upgrade") is True
+        return _admin(who, session, "admin.pin", "autorate==%s" % version,
+                      lambda: admin_module.pin(
+                          session, registry_path=app.state.admin_registry, version=version,
+                          wheel=str(body.get("wheel") or ""), sha256=str(body.get("sha256") or ""),
+                          source=str(body.get("source") or ""), upgrade=upgrade))
 
     @app.get("/api/v1/share/{token}")
     def shared_packet(token: str, request: Request,
