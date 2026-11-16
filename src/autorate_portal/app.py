@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from . import (auth, badge as badge_module, claims as claims_module, db,
                exports as exports_module, i18n, policies as policies_module,
-               trend as trend_module)
+               records as records_module, trend as trend_module)
 from .engine import deciding_row
 from .ingest import (ingest as ingest_bundle, load_stored, packet_store,
                      provenance as provenance_of)
@@ -180,6 +180,39 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         return JSONResponse(status_code=201, content={
             "id": result.row_id, "packet_id": result.packet_id,
             "badge": result.badge, "note": result.note})
+
+    @app.post("/api/v1/records", status_code=201)
+    def records_ingest(file: UploadFile, request: Request,
+                       session: Session = Depends(session_dependency),
+                       who: auth.Principal = Depends(principal)) -> JSONResponse:
+        """AC12 / F6 exception (c): a case id already in the pool is refused.
+
+        The id space is the project's. A file that reuses an id does not add a
+        case, it re-rolls the seeded split, and a re-rolled split changes the
+        published bounds without changing a byte of any certificate - so the
+        refusal names the collision and that consequence, and nothing is stored.
+        """
+        guard(who, auth.INGEST_PACKET, session, action="records.ingest",
+              target=file.filename or "")
+        context = _evidence_context(session, app.state.store_dir, who,
+                                    request.query_params.get("packet"))
+        if context is None:
+            raise HTTPException(
+                status_code=409,
+                detail="no packet in this project, so there is no calibration pool "
+                       "to check this file against")
+        try:
+            result = records_module.ingest_records(
+                session, project_id=who.project_id, actor=who.actor,
+                path=file.filename or "records.jsonl", data=file.file.read(),
+                files=context.stored_files, manifest=context.manifest,
+                store_dir=app.state.store_dir)
+        except records_module.RecordsError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        session.commit()
+        if not result.accepted:
+            return JSONResponse(status_code=409, content=result.as_dict())
+        return JSONResponse(status_code=201, content=result.as_dict())
 
     @app.get("/api/v1/packets/{packet_id}")
     def read_packet(packet_id: str, session: Session = Depends(session_dependency),
