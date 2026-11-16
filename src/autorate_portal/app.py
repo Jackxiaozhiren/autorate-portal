@@ -21,9 +21,12 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+import time
+
 from . import (auth, badge as badge_module, claims as claims_module, db,
                exports as exports_module, i18n, monitor as monitor_module,
                policies as policies_module, records as records_module,
+               render as render_module, share as share_module,
                trend as trend_module)
 from .engine import deciding_row
 from .ingest import (ingest as ingest_bundle, load_stored, packet_store,
@@ -506,6 +509,41 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
                 "results": monitor_module.results_for(session, who.project_id,
                                                       app.state.run_store),
                 "verdicts": list(monitor_module.VERDICTS)}
+
+    @app.get("/api/v1/share/{token}")
+    def shared_packet(token: str, request: Request,
+                      session: Session = Depends(session_dependency)) -> Response:
+        """F9 rule 3: a signed, expiring link to the *same* document the CLI renders.
+
+        No project token is needed — a share is public by construction — but the
+        grant's manifest hash must still name a packet this store actually holds
+        and must match that packet's stored bytes. Records artefacts are never
+        embedded, and an unverified-provenance badge travels into the document.
+        """
+        header_now = request.headers.get("x-test-now")
+        try:
+            now = int(header_now) if header_now is not None else int(time.time())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid share clock")
+        try:
+            grant = share_module.resolve(token, secret=app.state.secret_key, now=now)
+        except share_module.Expired as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        except share_module.Invalid as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        packet = session.get(db.Packet, grant.packet_id)
+        if packet is None or packet.manifest_sha256 != grant.manifest_sha256:
+            raise HTTPException(status_code=404, detail="this share names no stored packet")
+        stored = load_stored(app.state.store_dir, packet.manifest_sha256)
+        if stored is None or not stored.ok or stored.manifest is None:
+            raise HTTPException(status_code=503, detail="the stored packet no longer verifies")
+
+        badge, _note = provenance_of(stored.manifest, stored.files, None)
+        document = render_module.document(stored.manifest, stored.files,
+                                          provenance_badge=badge)
+        return Response(content=document, media_type="text/html; charset=utf-8",
+                        headers=grant.headers())
 
     @app.get("/api/v1/i18n/{locale}")
     def messages(locale: str) -> dict[str, str]:

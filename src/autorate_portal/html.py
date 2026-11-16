@@ -79,48 +79,11 @@ def render_certificate(manifest: Manifest, path: str, raw: bytes) -> str:
 
 
 def render(manifest: Manifest, files: dict[str, bytes]) -> str:
-    """Deterministic single-file HTML; no clock, no CDN, no script."""
-    certificates = [(a.path, files[a.path]) for a in manifest.artifacts
-                    if a.kind == "certificate" and a.path in files]
-    records = [a.path for a in manifest.artifacts if a.kind == "records"]
+    """F9 rule 4: the CLI target delegates to the one document contract.
 
-    parts = [
-        '<!doctype html><html lang="en"><head><meta charset="utf-8">',
-        '<title>Evidence packet %s</title><style>%s</style></head><body>' % (e(manifest.packet_id), STYLE),
-        '<h1>Evidence packet <code>%s</code></h1>' % e(manifest.packet_id),
-        '<p class="meta">protocol digest <code>%s</code> · source revision <code>%s</code> '
-        '· source version <code>%s</code> · lane <code>%s</code></p>'
-        % (e(manifest.protocol_digest), e(manifest.source_revision),
-           e(manifest.source_version), e(manifest.lane)),
-        '<p class="meta">This view reads artefact bytes. It computes no statistic and contains no '
-        'records rows.</p>',
-    ]
-
-    if records:
-        parts.append('<div class="card refusal"><strong>PRIVACY</strong> — this packet declares '
-                     'records artefacts; their rows are never rendered: %s</div>' % e(", ".join(records)))
-    if manifest.records_excluded:
-        parts.append('<div class="card">Shareable packet: records artefacts are excluded and named '
-                     'here, not silently dropped: %s</div>' % e(", ".join(manifest.excluded_records)))
-
-    for path, raw in certificates:
-        parts.append(render_certificate(manifest, path, raw))
-
-    parts.append('<h2>Reproduction</h2><div class="card">'
-                 '<p>Pinned distribution: <code>%s==%s</code>, wheel <code>%s</code>, '
-                 'sha256 <code>%s</code>.</p>'
-                 '<pre>autorate-portal verify-packet &lt;packet.tar&gt;\n'
-                 'autorate verify --protocol protocol.json  # %s</pre>'
-                 '<p class="meta">A stranger needs the packet, network access to PyPI and Docker; '
-                 'no access to the producing organisation.</p></div>'
-                 % (e(manifest.distribution.name), e(manifest.distribution.version),
-                    e(manifest.distribution.wheel), e(manifest.distribution.sha256),
-                    e(manifest.expected_rederived)))
-
-    parts.append('<h2>Declared artefacts</h2><table><tr><th>path</th><th>kind</th>'
-                 '<th>sha256</th></tr>')
-    for artefact in manifest.artifacts:
-        parts.append('<tr><td><code>%s</code></td><td>%s</td><td><code>%s</code></td></tr>'
-                     % (e(artefact.path), e(artefact.kind), e(artefact.sha256)))
-    parts.append('</table></body></html>')
-    return "\n".join(parts) + "\n"
+    Imported lazily so this module can keep owning the low-level primitives
+    (``e``, ``STYLE``, ``render_certificate``) that ``render.document`` reuses
+    without a module-level import cycle.
+    """
+    from .render import document
+    return document(manifest, files)
