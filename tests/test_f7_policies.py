@@ -13,9 +13,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlalchemy import select
 
-from autorate_portal import auth, db, monitor, policies
+from autorate_portal import db, monitor, policies
 
 DIGEST_A = "a" * 12
 DIGEST_B = "b" * 12

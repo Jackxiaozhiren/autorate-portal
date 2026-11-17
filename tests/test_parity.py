@@ -80,6 +80,21 @@ def test_a_field_the_artefact_omits_is_compared_as_absent_not_zero():
     assert parity.compare_values({"autorate": "0", "feasible": False}, expected)
 
 
+def test_the_third_bound_shape_is_read_so_parity_agrees_with_ingest():
+    # W-F1: cert_severity_ordinal.json publishes its bound under the plain key
+    # `bound` with no unit. ingest.summary_fields reads that shape; parity must
+    # read the artefact's own value through the same three shapes or it flags a
+    # difference where there is none and the Section 6.3 gate goes red for the
+    # wrong reason. No unit is invented for the unit-less certificate.
+    document = json.loads('{"feasible": true, "bound": 0.045180414995}', parse_float=str)
+    expected = parity.artefact_values(document)
+
+    assert expected["bound"] == "0.045180414995"
+    assert expected["bound_unit"] is None
+    assert parity.compare_values({"feasible": True, "bound": "0.045180414995",
+                                  "bound_unit": None}, expected) == []
+
+
 def test_the_live_verify_line_is_parsed_and_must_match_the_quoted_one():
     assert parity.parse_rederived("re-derived 612 /612 values") == "612 /612"
     assert parity.parse_rederived("re-derived 649 /649 values in 3s") == "649 /649"

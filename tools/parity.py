@@ -95,6 +95,13 @@ def artefact_values(document: dict) -> dict:
     bound = document.get("conditional_error_bound")
     if bound is None:
         bound = document.get("marginal_error_bound")
+    if bound is None:
+        # W-F1: cert_severity_ordinal.json publishes its bound under the plain
+        # key `bound`. The portal's ingest reads that third shape; parity must
+        # read the artefact's own published value through the same three shapes
+        # or it compares the portal against a field it never published here.
+        # No unit is invented when the artefact states none.
+        bound = document.get("bound")
     return {
         "feasible": document.get("feasible"),
         "reason": document.get("reason"),

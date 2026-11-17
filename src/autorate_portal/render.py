@@ -16,9 +16,7 @@ Two F9 options change the document without changing its contract:
 """
 from __future__ import annotations
 
-from typing import Any
-
-from . import emit, html as html_module
+from . import html as html_module
 from .manifest import Manifest
 
 #: Artefacts at or above this size are linked, not embedded. A third party can

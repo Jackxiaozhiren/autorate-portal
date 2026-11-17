@@ -8,14 +8,13 @@ audit id disappears.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from autorate_portal import auth, db, i18n, render as render_module, share as share_module
+from autorate_portal import auth, db, render as render_module, share as share_module
 from autorate_portal.app import create_app
 from autorate_portal.html import render as html_render
 from autorate_portal.packet import verify_bundle

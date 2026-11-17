@@ -1,7 +1,6 @@
 """F7 over HTTP: create, versioned edit, well-known decisions, and the refusals."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
