@@ -28,6 +28,9 @@ ENV AUTHORATE_DB_URL=sqlite:////data/portal.db
 VOLUME ["/data"]
 EXPOSE 8000
 
+# Liveness, not readiness: a container whose database is gone should be restarted by nobody.
+# `/readyz` is the probe an orchestrator should gate traffic on -- it checks the connection and
+# the schema revision, so a replica that skipped its migration job never becomes ready.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
 

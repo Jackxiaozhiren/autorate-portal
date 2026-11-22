@@ -82,12 +82,15 @@ def advisory_key(database: str) -> int:
     return int.from_bytes(digest[:8], "big", signed=True)
 
 
-def alembic_config(url: str, *, script_location: str | Path | None = None) -> Config:
-    """The alembic configuration for ``url``, resolved the way the deployment resolved it.
+def alembic_config(url: str | None = None, *,
+                   script_location: str | Path | None = None) -> Config:
+    """The alembic configuration this deployment would use, with ``url`` if one is given.
 
     ``alembic.ini`` in the working directory wins, because that is the file the image and a
-    source checkout both ship and the file ``alembic`` itself would read. Outside a checkout
-    the packaged ``migrations/`` directory is used, so an installed portal still migrates.
+    source checkout both ship and the file ``alembic`` itself would read. Otherwise the
+    migrations directory that travels with the code is used: first the copy inside the
+    installed package (``pyproject.toml`` force-includes it), then the checkout's, so an
+    editable install migrates the same way an image does.
     """
     if script_location is not None:
         config = Config()
@@ -95,16 +98,40 @@ def alembic_config(url: str, *, script_location: str | Path | None = None) -> Co
     elif Path("alembic.ini").is_file():
         config = Config("alembic.ini")
     else:
-        packaged = Path(__file__).resolve().parents[2] / "migrations"
-        if not packaged.is_dir():
+        packaged = packaged_migrations()
+        if packaged is None:
             raise MigrationConfigurationError(
-                "no alembic.ini in %s and no migrations directory at %s; pass --migrations"
-                % (Path.cwd(), packaged))
+                "no alembic.ini in %s and no migrations directory in the package; "
+                "pass --migrations" % Path.cwd())
         config = Config()
         config.set_main_option("script_location", str(packaged))
-    # ConfigParser interpolates `%`, so a password with one in it has to be escaped here.
-    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+    if url is not None:
+        # ConfigParser interpolates `%`, so a password with one in it has to be escaped.
+        config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     return config
+
+
+def packaged_migrations() -> Path | None:
+    """The migrations directory that travels with this code, whether installed or in a tree."""
+    inside_package = Path(__file__).with_name("migrations")
+    if inside_package.is_dir():
+        return inside_package
+    in_tree = Path(__file__).resolve().parents[2] / "migrations"
+    return in_tree if in_tree.is_dir() else None
+
+
+def script_head(script_location: str | Path | None = None) -> str:
+    """The revision this build's chain ends at, read without touching a database.
+
+    Readiness compares the database against this. It is re-read on each probe rather than
+    cached: the chain is five small files, and a cached head would be a second answer to
+    "what does this build expect" that could drift from the first.
+    """
+    config = alembic_config(script_location=script_location)
+    head = ScriptDirectory.from_config(config).get_current_head()
+    if head is None:
+        raise MigrationConfigurationError("the migration chain has no head revision")
+    return head
 
 
 def upgrade_to_head(url: str | None = None, *, timeout: float | None = None,
@@ -114,7 +141,7 @@ def upgrade_to_head(url: str | None = None, *, timeout: float | None = None,
     config = alembic_config(target, script_location=script_location)
     with _exclusive(target, lock_timeout() if timeout is None else float(timeout)):
         command.upgrade(config, "head")
-    return ScriptDirectory.from_config(config).get_current_head()
+    return script_head(script_location)
 
 
 @contextlib.contextmanager

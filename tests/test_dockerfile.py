@@ -53,6 +53,14 @@ def test_the_boot_step_takes_the_schema_lock_before_it_serves():
     assert "alembic upgrade head" not in text, "the unlocked path must not come back"
 
 
+def test_the_healthcheck_stays_on_liveness():
+    """A healthcheck that reads the database turns its outage into a restart loop."""
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    healthcheck = text[text.index("HEALTHCHECK"):]
+    assert "/healthz" in healthcheck
+    assert "/readyz" not in healthcheck, "readiness belongs to the orchestrator, not to HEALTHCHECK"
+
+
 def test_the_boot_step_can_be_turned_off_for_a_migration_job():
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "AUTHORATE_MIGRATE_ON_START=0" in text, (

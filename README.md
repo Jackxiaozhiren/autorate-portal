@@ -40,9 +40,18 @@ keyed on `current_database()`, or a `flock` on `<database>.migrate.lock` for SQL
 replicas may start together without applying the same DDL twice. It waits
 `AUTHORATE_MIGRATE_LOCK_TIMEOUT` seconds (default 120) and then refuses with exit 4 rather
 than starting against an unknown schema. A deployment that migrates in its own job sets
-`AUTHORATE_MIGRATE_ON_START=0` on the replicas and runs `autorate-portal migrate` in the job;
-`/healthz` is a liveness check and does not prove the schema exists, so the job must be
-sequenced before the replicas, not beside them.
+`AUTHORATE_MIGRATE_ON_START=0` on the replicas and runs `autorate-portal migrate` in the job.
+
+Two probes answer two questions. `GET /healthz` is liveness and returns `{"status":"ok"}`
+without touching the database: a container whose database is gone should leave the rotation,
+not be restarted. `GET /readyz` is readiness — one connection, `SELECT 1`, and the revision in
+`alembic_version` compared against the head this build's chain ends at. It answers 200
+`{"status":"ready","schema":"0005_artifact_wheel_kind"}` or 503 with a fixed reason code
+(`database-unreachable`, `schema-missing`, `schema-behind` with `applied` and `expected`, or
+`schema-unverified` when the build carries no chain). The body never quotes a driver message,
+because a probe is unauthenticated and a driver's message quotes the connection URL. Gate
+traffic on `/readyz`: it is what catches `AUTHORATE_MIGRATE_ON_START=0` with a job that never
+ran, since `/healthz` stays 200 on an empty database.
 
 A person signs in once: `POST /api/v1/session` exchanges a project-scoped API token for an 8-hour
 signed cookie that names the project it was issued for. Writes authenticated by that cookie must

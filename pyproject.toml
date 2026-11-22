@@ -29,6 +29,12 @@ autorate-portal = "autorate_portal.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/autorate_portal"]
 
+# The chain travels with the code. Readiness compares the database against the head this
+# build expects, and `autorate-portal migrate` needs the same files; a wheel without them
+# could serve but could not say whether its schema was right.
+[tool.hatch.build.targets.wheel.force-include]
+"migrations" = "autorate_portal/migrations"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

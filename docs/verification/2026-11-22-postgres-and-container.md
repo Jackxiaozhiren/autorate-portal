@@ -3,8 +3,8 @@
 Two gaps had been recorded as environment limitations rather than results: the migration chain had
 only ever run on SQLite, and the image had never been built (`V1-B6 = not-run`, 2026-11-17). Both
 were closed on this machine by starting the Docker daemon that was already installed. Every number
-below is a command's own output, captured 16:49–17:05 GMT+8, except the concurrency section
-(18:07–18:40), which was added the same evening and says so where it starts.
+below is a command's own output, captured 16:49–17:05 GMT+8, except the two sections added the
+same evening (18:07–18:49), which say so where they start.
 
 ## Environment
 
@@ -55,6 +55,32 @@ constant and never touches the database, so a replica that skipped the migration
 until the first real request. The job has to be sequenced **before** the replicas; the image does
 not detect the reverse order.
 
+## Readiness, so the orchestrator catches it (added 18:42-18:49)
+
+P15 named a gap and left it open. `/readyz` closes it: one connection, `SELECT 1`, and the
+revision in `alembic_version` compared against the head this build's chain ends at. `/healthz`
+stays a constant and stays the container's `HEALTHCHECK`, because a liveness probe that reads the
+database turns its outage into a restart loop. Every row below is the same rebuilt image
+(`sha256:f3543b69…`) against `postgres:17`, driven by `curl`.
+
+| Row | What it asks | Reading | Verdict |
+|---|---|---|---|
+| P16 | a replica that migrated at boot is ready | `/readyz` → 200 `{"status":"ready","schema":"0005_artifact_wheel_kind"}`; `/healthz` 200 | pass |
+| P17 | **P15's case**: skipping the step with no job never becomes ready | `AUTHORATE_MIGRATE_ON_START=0` on an empty database: `/healthz` **200**, `/readyz` **503** `{"status":"not-ready","reason":"schema-missing"}` | pass |
+| P18 | the job path becomes ready | one-shot job, then a skipping replica: `/readyz` 200 with the head | pass |
+| P19 | a live replica notices the schema going backwards, and forwards | `alembic downgrade 0004_packet_tombstone` → 503 `{"reason":"schema-behind","applied":"0004_packet_tombstone","expected":"0005_artifact_wheel_kind"}`; `upgrade head` → 200 again, without a restart | pass |
+| P20 | a database outage is not a reason to restart | `docker stop autorate-pg` → `/healthz` **200**, `/readyz` **503** `{"reason":"database-unreachable"}`, container still `(healthy)`; `docker start` → `ready` again | pass |
+
+The refusal body carries a fixed code and no driver text: `tests/test_readiness.py` asserts a
+`postgresql://portal:hunter2@…` URL produces an answer containing neither `hunter2` nor
+`postgresql`. The probe is unauthenticated, and a driver's message quotes the URL.
+
+`schema-unverified` exists for a build that cannot locate its chain. It should not arise for
+anything shipped: `pyproject.toml` now force-includes `migrations/` into the wheel (6 files,
+verified by listing the built wheel), and a clean venv with only the wheel installed runs
+`autorate-portal migrate` from a directory with no `alembic.ini` and reports
+`packaged migrations: …/site-packages/autorate_portal/migrations`, `head: 0005_artifact_wheel_kind`.
+
 ## Two defects the run found
 
 Neither was visible to any test that only reads files; both were found by building and running the
@@ -91,12 +117,16 @@ is right.
   `python:3.13-slim` floats. P5 says it builds; it does not say it is fit to ship.
 - **One architecture.** arm64 only, on this machine. CI's container replay runs on the runner's
   own architecture, which is not the same evidence.
-- **Concurrent starts are serialised, not orchestrated.** P9-P15 show the lock does its job on one
-  host and in three containers started by hand. They do not exercise an orchestrator: no rolling
-  update with live traffic, no readiness gate, no pod killed mid-migration. The lock is released by
-  the connection dying, so a killed holder should not wedge the next one — that is a property of
-  advisory locks, not something measured here.
+- **Concurrent starts are serialised, not orchestrated.** P9-P20 show the lock and the probes do
+  their job on one host and in containers started by hand. They do not exercise an orchestrator:
+  no rolling update with live traffic, no pod killed mid-migration, and no real readiness gate —
+  the probes were driven by `curl`, not by a scheduler that acts on the answer. No manifest for any
+  orchestrator ships with this repository, so the probe contract is documented and testable rather
+  than configured.
+- **A killed lock holder was never killed.** The lock is released when the holding connection
+  dies, so a replica killed mid-migration should not wedge the next one. That is a property of
+  advisory locks and of `flock`, not something measured here.
 - **The timeout is a default, not a measurement.** 120 s was never reached in any run (the slowest
   upgrade took 4 s end to end including container start). A deployment whose largest migration
   takes longer than the default will refuse and restart; `AUTHORATE_MIGRATE_LOCK_TIMEOUT` is the
-  knob, and its interaction with a short probe deadline was not tested.
+  knob, and its interaction with a short startup deadline was not tested.

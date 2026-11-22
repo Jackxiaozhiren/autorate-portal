@@ -20,7 +20,8 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import time
@@ -135,6 +136,17 @@ def _evidence_context(session: Session, store_dir: Path, who: auth.Principal,
     return _Context(packet, files, manifest, summaries, certificates, audit_text, feasibility)
 
 
+def _not_ready(response: Response, reason: str, **detail: str) -> dict[str, str]:
+    """A readiness answer that says why, and says nothing about the database's address.
+
+    ``reason`` is a fixed code: a probe is unauthenticated, and a driver's exception text
+    quotes the connection URL, password included. The operator gets the code and the log
+    line from the server, not the credential from the endpoint.
+    """
+    response.status_code = 503
+    return {"status": "not-ready", "reason": reason, **detail}
+
+
 def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None = None,
                secret_key: str | None = None,
                run_store: Path | None = None,
@@ -233,6 +245,47 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/readyz")
+    def readyz(response: Response) -> dict[str, str]:
+        """Readiness: this build can serve, and the database is the schema it expects.
+
+        Liveness is `/healthz` and is deliberately not this. A container whose database is
+        gone should leave the rotation, not be restarted: a restart cannot create a schema,
+        so a liveness probe that touched the database would turn an outage into a crash
+        loop. This route is the one an orchestrator may gate traffic on, and it asks three
+        questions in order -- can we reach a connection, is there a revision, and is it the
+        revision this build's chain ends at.
+
+        The third question is the one a `AUTHORATE_MIGRATE_ON_START=0` deployment needs:
+        without it, a replica whose migration job never ran reports healthy until the first
+        request that reads a table (measured: 500 on POST /api/v1/session).
+        """
+        from . import migrate as migrate_module
+
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("select 1"))
+        except (SQLAlchemyError, ImportError):
+            # ImportError is the driver missing from this build: from a probe's side that is
+            # the same answer as an unreachable server, and neither is a reason to restart.
+            return _not_ready(response, "database-unreachable")
+        try:
+            with engine.connect() as connection:
+                applied = connection.execute(
+                    text("select version_num from alembic_version")).scalars().first()
+        except SQLAlchemyError:
+            return _not_ready(response, "schema-missing")
+        try:
+            expected = migrate_module.script_head()
+        except migrate_module.MigrationConfigurationError:
+            # This build does not carry its chain, so it cannot say what the database
+            # should be. Ready here would be a guess, and a guess is not a gate.
+            return _not_ready(response, "schema-unverified")
+        if applied != expected:
+            return _not_ready(response, "schema-behind",
+                              applied=str(applied or "none"), expected=expected)
+        return {"status": "ready", "schema": str(applied)}
 
     @app.get("/version")
     def version() -> dict[str, str]:
