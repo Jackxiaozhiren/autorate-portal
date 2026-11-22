@@ -132,8 +132,8 @@ that they describe the intended end state; it does not prove a server accepts th
 closed by the `postgres` job in the next section; P1-P20 remain the container-and-probe evidence
 from this machine.
 
-Suite in the SQLite job: **411 passed, 7 skipped** (the PostgreSQL file skips when
-`AUTHORATE_TEST_PG_URL` is unset); `ruff` clean on the CI rule set (`E9,F63,F7,F82,F401,F811`).
+Suite in the SQLite job: **411 passed, 12 skipped** (the PostgreSQL and container files skip when
+their variables are unset); `ruff` clean on the CI rule set (`E9,F63,F7,F82,F401,F811`).
 
 ## The postgres job (added 19:45-20:10)
 
@@ -165,6 +165,39 @@ locally — with the variable unset the same command reports `7 skipped` and the
 What this still does not prove: one container, no failover, no TLS and no managed cluster; an empty
 single-tenant schema; and no orchestrator acting on `/readyz`. It executes the contract, it does not
 schedule it.
+
+## The container job (added 20:30-21:20)
+
+P12, P17, P18 and P20 were read by hand from two containers and `curl`. Hand readings do not repeat
+when the Dockerfile, the probe or the migration command changes, so a `container` job now builds
+`autorate-portal:ci` on every push and replays them.
+
+`tests/test_container_replay.py` creates a private network, starts `postgres:17`, and gives each
+test an empty `public` schema plus its own portal container with a published port. Five tests,
+**10.5 s** locally:
+
+| Reading | Assertion |
+|---|---|
+| P17 | `AUTHORATE_MIGRATE_ON_START=0` on an empty database: `/healthz` 200, `/readyz` 503 `schema-missing` |
+| P18 | a one-shot `autorate-portal migrate` container exits 0 printing `schema at 0005_…`; the **already running** replica answers `/readyz` 200 with the same head, and its `StartedAt` is unchanged |
+| P12 | three replicas that migrate at boot all answer 200 and leave exactly **one** `alembic_version` row |
+| P20 | `docker stop` the database: `/healthz` 200 while `/readyz` reports `database-unreachable`; after `docker start` the same replica is ready again |
+| P7 | `--entrypoint id -u` prints `10001` |
+
+The assertions can fail. Changing the image command from `migrate --if-enabled` to `migrate` (so the
+skip flag is ignored) rebuilds in seconds and makes the P17 test fail in 2.6 s: the replica migrates
+at boot and answers readyz 200. The job also refuses to pass on a skip, like the postgres job, so a
+runner without Docker cannot leave it green; a final `always()` step removes any `at-gate-`
+container and network the fixtures did not get to.
+
+One finding from writing it: Docker's published port accepts a connection **before** the container's
+server is listening and then closes it, so a health poll must treat "connection closed without a
+response" as *not answering yet*. The first run failed on exactly that, and `tools`-level polling
+that only catches `URLError` would have been flaky on a busy runner.
+
+What this does not prove: no scheduler acts on the answers — the probes are driven by the test, not
+by Kubernetes, Nomad or Compose — and one host, one database, no failover. It repeats the manual
+readings; it does not become an orchestrator.
 
 ## One reading worth writing down
 

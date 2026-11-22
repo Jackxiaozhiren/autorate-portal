@@ -117,6 +117,39 @@ jobs:
           fi
           grep -qE '[0-9]+ passed' "$log"
 
+  container:
+    name: container / the job and the probes
+    runs-on: ubuntu-latest
+    needs: suite
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - name: Build the image the deployment would run
+        run: docker build -t autorate-portal:ci .
+      - name: Replay P12, P17, P18, P20 and the uid with containers
+        run: |
+          # These readings were made by hand with curl (docs/verification/2026-11-22-*). They are
+          # the only evidence that the image, the probes and the job agree, so they run on every
+          # push. `-o addopts=` keeps the summary the guard reads.
+          set -euo pipefail
+          log="$RUNNER_TEMP/container.txt"
+          AUTHORATE_TEST_IMAGE=autorate-portal:ci \
+            uv run --frozen --extra dev pytest -o addopts= -q -rs tests/test_container_replay.py \
+            | tee "$log"
+          if grep -qE '[0-9]+ skipped' "$log"; then
+            echo "::error::a container test skipped; docker or the image is missing"
+            exit 1
+          fi
+          grep -qE '[0-9]+ passed' "$log"
+      - name: Leave no container behind
+        if: always()
+        run: |
+          docker ps -aq --filter "name=at-gate-" | xargs -r docker rm -f
+          docker network ls --filter "name=at-gate-" -q | xargs -r docker network rm
+
   packet:
     name: frozen packet / AC1 / AC9 / AC10 / I6
     runs-on: ubuntu-latest
