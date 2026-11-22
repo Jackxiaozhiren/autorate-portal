@@ -63,6 +63,24 @@ def test_offline_mode_renders_the_sql_before_it_runs(tmp_path):
     assert not (tmp_path / "never-created.db").exists()
 
 
+def test_the_chain_renders_for_postgresql_without_a_server():
+    """SQLite is the only database the gates have run against; the DDL says more.
+
+    0005 rewrites a CHECK constraint. On SQLite that is a table recreate; on
+    PostgreSQL it should be a plain DROP/ADD over the existing table, not a copy.
+    Rendering the chain offline for the PostgreSQL dialect proves the migration
+    is not SQLite-only without needing a server, which no gate here has.
+    """
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        command.upgrade(_config("postgresql://user:pass@localhost/never"), "head", sql=True)
+    sql = buffer.getvalue()
+    assert "CREATE TABLE certificate_summary" in sql
+    assert "ALTER TABLE artifact DROP CONSTRAINT ck_artifact_kind" in sql
+    assert "ALTER TABLE artifact ADD CONSTRAINT ck_artifact_kind CHECK" in sql
+    assert "'wheel'" in sql, "the widened vocabulary reaches the PostgreSQL DDL too"
+
+
 def test_no_create_table_is_written_outside_the_migration():
     offenders = []
     for source in sorted((ROOT / "src").rglob("*.py")):
