@@ -230,6 +230,11 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
             return auth.principal_for_project(session, email=email, project_id=project_id)
         except auth.AuthError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except auth.Forbidden as exc:
+            # A signed cookie whose membership is gone is not an identity for this project.
+            # Left uncaught, a removed member got a 500 from every route they touched: the
+            # class documents 403, and the table that decided it is the authority either way.
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     def guard(principal_value: auth.Principal, capability: str, session: Session,
               *, action: str, target: str) -> None:
@@ -291,6 +296,51 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     def version() -> dict[str, str]:
         from . import __version__
         return {"version": __version__, "autorate": "0.1.2"}
+
+    @app.get("/api/v1/session")
+    def read_session(request: Request, response: Response,
+                     session: Session = Depends(session_dependency)) -> dict:
+        """Who this browser already is, so a reload does not ask for a token it has.
+
+        Signing in happens once per eight hours; a page is reloaded far more often. Without
+        this route a reload leaves the page with no memory of the session, so it asks for a
+        token the cookie already carries and every write loses the double-submit value it
+        never read. Measured before this existed: `/api/v1/certificates` answered 200 with
+        the cookie while a cookie write answered 403.
+
+        Cookie only. A token caller has no session to resume, and answering with an identity
+        that did not come from a cookie would blur two credential types that the write rule
+        keeps apart. The csrf value is readable by this origin by design - it is a
+        double-submit check, not a secret - and it is re-issued when only that cookie is gone,
+        because the session it belongs to is still valid.
+
+        The membership table is read, not the cookie: a member whose access was revoked gets
+        401 here on the next request, exactly as they would on any other route.
+        """
+        cookie = request.cookies.get(SESSION_COOKIE, "")
+        claims = auth.read_session_claims(app.state.secret_key, cookie) if cookie else None
+        if claims is None:
+            raise HTTPException(status_code=401, detail="no session")
+        email, project_id = claims
+        if not project_id:
+            raise HTTPException(status_code=401, detail="the session names no project")
+        try:
+            who = auth.principal_for_project(session, email=email, project_id=project_id)
+        except auth.AuthError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except auth.Forbidden as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        csrf = request.cookies.get(CSRF_COOKIE, "")
+        if not csrf:
+            csrf = secrets.token_urlsafe(32)
+            secure = request.url.scheme == "https" or os.environ.get("AUTHORATE_COOKIE_SECURE") == "1"
+            response.set_cookie(CSRF_COOKIE, csrf, max_age=SESSION_TTL_SECONDS, httponly=False,
+                                samesite="lax", secure=secure, path="/")
+        # This answer depends on a cookie, and a shared cache that ignores Cookie would hand
+        # one person's identity to the next. Nothing here is worth caching.
+        response.headers["Cache-Control"] = "no-store"
+        return {"actor": who.actor, "role": who.role, "project_id": who.project_id,
+                "csrf": csrf}
 
     @app.post("/api/v1/session")
     def create_session(body: dict, request: Request, response: Response,

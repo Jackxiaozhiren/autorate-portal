@@ -10,6 +10,9 @@
   h1 { font-size: 20px; margin: 0 0 4px; }
   h2 { font-size: 16px; margin: 0 0 8px; }
   .muted { color: var(--muted); }
+  /* A hidden control must be hidden even when it carries a display rule of its
+     own: `label` is flex, and an author rule outranks the [hidden] UA default. */
+  [hidden] { display: none !important; }
   .row { display: flex; gap: 8px; align-items: end; margin: 16px 0; flex-wrap: wrap; }
   label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
   input, select { padding: 6px 8px; min-width: 160px; }
@@ -57,7 +60,7 @@
       <option value="zh-Hans">简体中文</option>
     </select>
   </label>
-  <label><span data-i18n="label.token">API token</span>
+  <label id="token-label"><span data-i18n="label.token">API token</span>
     <input id="token" type="password" autocomplete="off" placeholder="project-scoped token">
   </label>
   <button id="signin" data-i18n="label.signin">Sign in</button>
@@ -65,6 +68,8 @@
   <button id="signout" data-i18n="label.signout">Sign out</button>
   <button id="clear" data-i18n="label.clear">Clear</button>
 </div>
+<p class="muted" id="signedin" hidden></p>
+<p class="muted" id="note" hidden></p>
 <p class="error" id="error" role="alert"></p>
 
 <h2 data-i18n="label.check_claim">Check a claim</h2>
@@ -110,11 +115,17 @@
 // numeric markup from data it has not received rendered. It formats nothing
 // numeric. All display strings come from the server's single message catalog;
 // there is no second, drifting copy of the translations here.
-const state = { token: "", signedIn: false, csrf: "", rows: [], locale: "en", messages: {} };
+const state = { token: "", signedIn: false, csrf: "", rows: [], locale: "en", messages: {}, who: null };
 const el = (id) => document.getElementById(id);
 
 function msg(key, fallback) { return state.messages[key] || fallback; }
 function say(message) { el("error").textContent = message || ""; }
+// An empty project is a state, not a failure: "no certificates yet" in the red
+// alert slot reads as a fault to the reader who is seeing the portal first.
+function note(message) {
+  el("note").textContent = message || "";
+  el("note").hidden = !message;
+}
 
 function withLocale(path) {
   const join = path.indexOf("?") === -1 ? "?" : "&";
@@ -127,6 +138,10 @@ function applyMessages() {
     const key = node.getAttribute("data-i18n");
     if (state.messages[key]) { node.textContent = state.messages[key]; }
   });
+  // The identity line is built from a template with two values, so it cannot
+  // carry data-i18n; a language switch has to rebuild it or it stays in the
+  // language it was rendered in.
+  if (state.signedIn && state.who) { showWho(state.who); }
 }
 
 async function loadMessages() {
@@ -176,6 +191,26 @@ async function openCertificate(id) {
   } catch (error) { say(error.message); }
 }
 
+function showWho(who) {
+  state.who = who;
+  const template = msg("text.signed_in_as", "signed in as {actor} · project {project}");
+  // A function replacement, so an email containing $& or $1 is copied, not expanded.
+  el("signedin").textContent = template
+    .replace("{actor}", () => who.actor)
+    .replace("{project}", () => who.project_id);
+  el("signedin").hidden = false;
+  el("token-label").hidden = true;
+  el("signin").hidden = true;
+}
+
+function hideWho() {
+  state.who = null;
+  el("signedin").textContent = "";
+  el("signedin").hidden = true;
+  el("token-label").hidden = false;
+  el("signin").hidden = false;
+}
+
 async function signIn() {
   const token = el("token").value.trim();
   say("");
@@ -195,6 +230,7 @@ async function signIn() {
     state.csrf = body.csrf;
     state.token = "";
     el("token").value = "";
+    showWho(body);
     await load();
   } catch (error) { say(error.message); }
 }
@@ -206,11 +242,29 @@ async function signOut() {
   el("token").value = "";
   el("certificates").hidden = true;
   el("detail").replaceChildren();
+  hideWho();
+  note("");
   say("");
+}
+
+// A reload keeps the cookie and loses this script's memory. Asking the server
+// who the cookie names is the only way the page can tell "signed in" from
+// "signed out" - and the csrf value has to come with the answer, or every write
+// after a reload would be refused for a token the reader cannot see.
+async function resume() {
+  try {
+    const response = await call("/api/v1/session");
+    const body = await response.json();
+    state.signedIn = true;
+    state.csrf = body.csrf;
+    showWho(body);
+    return true;
+  } catch (ignored) { return false; }
 }
 
 async function load() {
   say("");
+  note("");
   if (!state.signedIn && !state.token) { say(msg("label.token", "a project-scoped token is required")); return; }
   try {
     const response = await call("/api/v1/certificates");
@@ -219,7 +273,7 @@ async function load() {
     body.replaceChildren(...rows.map(rowFor));
     el("certificates").hidden = rows.length === 0;
     el("detail").replaceChildren();
-    if (rows.length === 0) { say(msg("label.no_certificates", "no certificates in this project yet")); }
+    if (rows.length === 0) { note(msg("label.no_certificates", "no certificates in this project yet")); }
   } catch (error) { say(error.message); }
 }
 
@@ -282,13 +336,22 @@ el("clear").addEventListener("click", () => {
   el("verdict").replaceChildren();
   el("tools").replaceChildren();
   el("certificates").hidden = true;
+  hideWho();
+  note("");
   say("");
 });
 
 fetch("/version").then((r) => r.json()).then((body) => {
   el("version").textContent = "portal " + body.version + " · pinned autorate " + body.autorate;
 }).catch(() => {});
-loadMessages().catch(() => {});
+
+// Messages first: the identity line is built from the catalog, so resuming
+// before it loads would leave a line with untranslated placeholders. A failed
+// catalog fetch must not stop the resume - the line falls back to English.
+loadMessages().catch(() => {}).then(resume).then((signedIn) => {
+  if (signedIn) { return load(); }
+  return undefined;
+}).catch(() => {});
 </script>
 </body>
 </html>

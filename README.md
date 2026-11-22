@@ -56,8 +56,11 @@ ran, since `/healthz` stays 200 on an empty database.
 A person signs in once: `POST /api/v1/session` exchanges a project-scoped API token for an 8-hour
 signed cookie that names the project it was issued for. Writes authenticated by that cookie must
 carry `x-csrf-token` (double-submit); token-authenticated requests do not, because a typed token is
-not ambient authority. `DELETE /api/v1/session` clears both cookies. No password is stored and no
-token is written into the cookie.
+not ambient authority. `GET /api/v1/session` answers who that cookie names, with the csrf value, so
+a reload resumes the session instead of asking for a token the browser already has; a membership
+that was revoked answers 403 on the next request, and an expired or absent cookie answers 401.
+`DELETE /api/v1/session` clears both cookies. No password is stored and no token is written into
+the cookie.
 
 ## Exports
 
