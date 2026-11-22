@@ -9,7 +9,8 @@ from autorate_portal import EXIT_NOT_RUN, EXIT_OK, EXIT_REFUSED
 from autorate_portal.engine import append_row, find_row, read_rows, run
 from autorate_portal.manifest import sha256_bytes
 from autorate_portal.replay import Environment
-from conftest import reseal_manifest, rewrite_bundle, split_bundle, tamper_bundle
+from conftest import (OFFLINE_WHEEL_BYTES, reseal_manifest, rewrite_bundle,
+                      split_bundle, tamper_bundle)
 
 WHEEL_BYTES = b"pinned-autorate-wheel-bytes"
 WHEEL = "autorate-0.1.2-py3-none-any.whl"
@@ -54,6 +55,7 @@ def test_i5_a_certified_run_row_carries_the_pinned_invocation_and_exit_code(buil
     assert row.command == ["verify", "--protocol", "protocol.json"]
     assert row.exit_code == 0
     assert row.distribution == "autorate==0.1.2"
+    assert row.channel == "online"
     assert row.wheel_sha256 == sha256_bytes(WHEEL_BYTES)
     assert len(row.stdout_sha256) == 64
     assert row.denominator_replayed == row.denominator_stored == "612 /612"
@@ -235,3 +237,28 @@ def test_the_run_command_accepts_the_image_flag():
         args = build_parser().parse_args(argv)
         assert args.image == "python:3.12-slim", argv
         assert args.backend == "container", argv
+
+
+def test_a_run_row_names_the_offline_channel_and_never_touches_the_index(offline_built, tmp_path):
+    registry = _registry(tmp_path, sha256_bytes(OFFLINE_WHEEL_BYTES))
+
+    def no_fetch(_):
+        raise AssertionError("the index was consulted for an embedded packet")
+
+    env, calls = _env(network=False)
+    env.wheel_fetcher = no_fetch
+
+    row = run(offline_built[0], backend="container", registry_path=registry, env=env,
+              store_path=tmp_path / "runs.jsonl")
+
+    assert row.state == "certified"
+    assert row.channel == "offline"
+    assert read_rows(tmp_path / "runs.jsonl")[0]["channel"] == "offline"
+    assert len(calls) == 1
+
+
+def test_a_row_written_before_the_channel_reads_back_unknown(tmp_path):
+    store = tmp_path / "runs.jsonl"
+    store.write_text(json.dumps({"run_id": "r1", "state": "certified"}) + "\n",
+                     encoding="utf-8")
+    assert read_rows(store)[0]["channel"] == "unknown"

@@ -36,8 +36,8 @@ def test_f2_renders_in_both_languages_with_different_state_text():
     assert '<html lang="en">' in english
     assert '<html lang="zh-Hans">' in chinese
     assert english != chinese
-    assert "refusal" in english
-    assert "拒绝" in chinese
+    assert "not statistically feasible" in english
+    assert "统计不可行" in chinese
     assert chinese.count("empty_feasible_set") == english.count("empty_feasible_set")
 
 
@@ -91,7 +91,7 @@ def test_the_state_badge_differs_in_text_not_only_in_hue():
     english = localized_state_badge("en", "refusal")
     chinese = localized_state_badge("zh-Hans", "refusal")
     assert english != chinese and 'data-state="refusal"' in english
-    assert "拒绝" in chinese
+    assert "统计不可行" in chinese
 
 
 def test_the_single_page_client_has_keyboard_reachable_controls():

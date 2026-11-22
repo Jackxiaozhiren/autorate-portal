@@ -71,6 +71,7 @@ class RunRow:
     digest_replayed: str
     denominator_stored: str
     denominator_replayed: str
+    channel: str = "unknown"
     refusals: list[Refusal] = field(default_factory=list)
 
     def as_json(self) -> dict[str, Any]:
@@ -94,6 +95,7 @@ class RunRow:
             "digest_replayed": self.digest_replayed,
             "denominator_stored": self.denominator_stored,
             "denominator_replayed": self.denominator_replayed,
+            "channel": self.channel or "unknown",
             "refusals": [{"path": r.path, "reason": r.reason,
                           "expected": r.expected, "actual": r.actual} for r in self.refusals],
         }
@@ -134,7 +136,7 @@ def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
          stdout_sha256: str, summary_line: str = "",
          state: str, reason: str, digest_stored: str, digest_replayed: str,
          denominator_stored: str, denominator_replayed: str, image: str = "",
-         refusals: list[Refusal] | None = None) -> RunRow:
+         channel: str = "unknown", refusals: list[Refusal] | None = None) -> RunRow:
     observation = {"packet_id": packet_id, "backend": backend, "image": image,
                    "argv": list(argv), "command": list(command),
                    "distribution": distribution, "state": state, "reason": reason,
@@ -150,7 +152,8 @@ def _row(*, packet_id: str, backend: str, distribution: str, wheel_sha256: str,
         summary_line=summary_line, state=state,
         rc=STATE_RC[state], reason=reason, digest_stored=digest_stored,
         digest_replayed=digest_replayed, denominator_stored=denominator_stored,
-        denominator_replayed=denominator_replayed, refusals=list(refusals or []))
+        denominator_replayed=denominator_replayed, channel=channel or "unknown",
+        refusals=list(refusals or []))
 
 
 def run(packet_path: Path, *, backend: str = "container", registry_path: Path | None = None,
@@ -181,6 +184,7 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
                    reason="pinned-distribution registry unusable: %s" % describe(problems),
                    digest_stored=manifest.manifest_sha256, digest_replayed="",
                    denominator_stored=manifest.expected_rederived, denominator_replayed="",
+                   channel="offline" if manifest.embeds_wheel else "online",
                    refusals=problems)
         return _record(row, store_path)
 
@@ -194,6 +198,7 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
                    reason="packet pin rejected by the registry: %s" % describe(problems),
                    digest_stored=manifest.manifest_sha256, digest_replayed="",
                    denominator_stored=manifest.expected_rederived, denominator_replayed="",
+                   channel="offline" if manifest.embeds_wheel else "online",
                    refusals=problems)
         return _record(row, store_path)
 
@@ -215,7 +220,7 @@ def run(packet_path: Path, *, backend: str = "container", registry_path: Path | 
                digest_replayed=outcome.stdout_sha256,
                denominator_stored=manifest.expected_rederived,
                denominator_replayed=outcome.rederived, image=image,
-               refusals=outcome.refusals)
+               channel=outcome.channel, refusals=outcome.refusals)
     return _record(row, store_path)
 
 
@@ -239,6 +244,9 @@ def read_rows(store_path: Path) -> list[dict[str, Any]]:
             raise ValueError("%s line %d is not JSON: %s" % (target, number, exc)) from exc
         if not isinstance(document, dict) or "run_id" not in document:
             raise ValueError("%s line %d is not a run row" % (target, number))
+        # Rows written before the channel existed read back as unknown. They
+        # must never be read as `online`: that would invent an observation.
+        document.setdefault("channel", "unknown")
         rows.append(document)
     return rows
 

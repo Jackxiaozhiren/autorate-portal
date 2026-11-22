@@ -133,21 +133,37 @@ def principal_from_token(session: Session, token: str, *, salt: str,
                      via="token")
 
 
-def sign_session(secret_key: str, email: str, *, ttl_seconds: int = 8 * 3600,
-                 now: datetime | None = None) -> str:
+def sign_session(secret_key: str, email: str, *, project_id: str = "",
+                 ttl_seconds: int = 8 * 3600, now: datetime | None = None) -> str:
+    """A signed value carrying the email and the project it was issued for.
+
+    The project travels in the signature because a session that names no project
+    would have to take one from the query string, and a caller could then ask
+    for a project its membership does not cover. The membership table still
+    decides the role; this only fixes which project the question is about.
+    """
     expiry = int(((now or datetime.now(timezone.utc)) + timedelta(seconds=ttl_seconds)).timestamp())
-    payload = "%s|%d" % (email, expiry)
+    payload = "%s|%s|%d" % (email, project_id, expiry)
     signature = hmac.new(secret_key.encode("utf-8"), payload.encode("utf-8"),
                          hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(("%s|%s" % (payload, signature)).encode("utf-8")).decode("ascii")
 
 
-def read_session(secret_key: str, value: str, *, now: datetime | None = None) -> str | None:
-    """The email, or ``None``. A tampered or expired value is not an identity."""
+def read_session_claims(secret_key: str, value: str, *,
+                        now: datetime | None = None) -> tuple[str, str] | None:
+    """(email, project_id), or ``None``. A tampered or expired value is not an identity."""
     try:
         decoded = base64.urlsafe_b64decode(value.encode("ascii")).decode("utf-8")
-        email, expiry, signature = decoded.rsplit("|", 2)
-        expected = hmac.new(secret_key.encode("utf-8"), ("%s|%s" % (email, expiry)).encode("utf-8"),
+        fields = decoded.split("|")
+        if len(fields) == 4:
+            email, project_id, expiry, signature = fields
+        elif len(fields) == 3:  # a session minted before the project was carried
+            email, expiry, signature = fields
+            project_id = ""
+        else:
+            return None
+        payload = "|".join(fields[:-1])
+        expected = hmac.new(secret_key.encode("utf-8"), payload.encode("utf-8"),
                             hashlib.sha256).hexdigest()
         if not hmac.compare_digest(signature, expected):
             return None
@@ -155,7 +171,13 @@ def read_session(secret_key: str, value: str, *, now: datetime | None = None) ->
             return None
     except (ValueError, UnicodeDecodeError):
         return None
-    return email
+    return email, project_id
+
+
+def read_session(secret_key: str, value: str, *, now: datetime | None = None) -> str | None:
+    """The email, or ``None``. Kept for callers that do not need the project."""
+    claims = read_session_claims(secret_key, value, now=now)
+    return claims[0] if claims is not None else None
 
 
 def principal_for_project(session: Session, *, email: str, project_id: str,

@@ -118,6 +118,25 @@ def test_a_partial_claim_is_422_and_the_surface_requires_a_principal(tmp_path):
     assert partial.status_code == 422
 
 
+def test_a_partial_claim_refusal_speaks_the_locale_it_was_asked_in(tmp_path):
+    """The validation error is not exempt from localization.
+
+    A screen that is Chinese everywhere else used to answer a blank field with
+    ``a claim needs share, field, unit and population; missing: field``.
+    """
+    client, _, producer, _, _ = _world4(tmp_path)
+    partial = {"share": "0.66"}
+    english = client.post("/api/v1/claims/check?locale=en",
+                          headers={"x-api-token": producer}, json=partial)
+    chinese = client.post("/api/v1/claims/check?locale=zh-Hans",
+                          headers={"x-api-token": producer}, json=partial)
+
+    assert english.status_code == chinese.status_code == 422
+    assert "missing: field, unit, population" in english.json()["detail"]
+    assert "字段、单位、总体" in chinese.json()["detail"]
+    assert "missing" not in chinese.json()["detail"]
+
+
 def test_a_viewer_may_check_a_claim_but_may_not_export(tmp_path, m4_built):
     client, sessions, producer, viewer, _ = _world4(tmp_path)
     _upload(client, producer, m4_built[0])

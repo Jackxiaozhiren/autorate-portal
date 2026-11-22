@@ -132,16 +132,26 @@ def mismatch_run_id(row: dict[str, Any] | None,
     return i18n.t(locale, "msg.no_run_row")
 
 
-def build_bundle(*, kind: str, manifest: Manifest, packet, files: dict[str, bytes],
+def build_bundle(*, kind: str, manifest: Manifest, packet=None, files: dict[str, bytes],
                  run_row: dict[str, Any] | None = None,
                  locale: str = i18n.DEFAULT_LOCALE) -> Bundle:
-    """Build one bundle. Refusals return a blocked Bundle, never partial bytes."""
+    """Build one bundle. Refusals return a blocked Bundle, never partial bytes.
+
+    ``packet`` is optional and, when absent, the digest and id come from the
+    manifest - which is where they are derived from the bytes in the first place.
+    A caller that does pass a stored row is checked against it: two sources for
+    one identity may agree or fail, never quietly take precedence.
+    """
     if kind not in KINDS:
         raise ExportRefused("unknown bundle kind %r (kinds: %s)" % (kind, ", ".join(KINDS)))
     limits = _known_limits(files)
     declared = {artefact.path: artefact for artefact in manifest.artifacts}
-    protocol_digest = packet.protocol_digest
+    protocol_digest = manifest.protocol_digest
     packet_id = manifest.packet_id
+    if packet is not None and getattr(packet, "protocol_digest", protocol_digest) != protocol_digest:
+        raise ExportRefused(
+            "the stored row and the manifest disagree on the protocol digest: %s vs %s"
+            % (packet.protocol_digest, protocol_digest))
 
     # F5 exception (a) / AC7: a replay that recorded a mismatch is the trigger.
     # Checked before any line is assembled, so a stored packet whose bytes are

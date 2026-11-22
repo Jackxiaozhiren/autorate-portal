@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from . import db, emit, i18n
+from . import db, emit, i18n, vocabulary
 from .manifest import Manifest, canonical_bytes, sha256_bytes
 
 STATES = ("certified", "not-certifiable", "drift", "not-run")
@@ -71,19 +71,24 @@ def state_for(summaries: list[db.CertificateSummary]) -> str:
 
 def _svg(state: str, value: str) -> str:
     left = "autorate gate"
-    width_left, width_right = 96, max(80, 10 * len(state) + 16)
+    label = vocabulary.display("badge", state)
+    width_left, width_right = 96, max(80, 7 * len(label) + 16)
     width = width_left + width_right
+    # The visible label is the qualified term; the machine state travels in the
+    # title, so a reader sees `verify passed` and an auditor can still recover
+    # which F8 state produced it.
+    title = "autorate gate: %s (%s)" % (state, label)
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="20" role="img" '
-            'aria-label="autorate gate: %s">'
-            '<title>autorate gate: %s</title>'
+            'aria-label="%s">'
+            '<title>%s</title>'
             '<rect width="%d" height="20" fill="#57606a"/>'
             '<rect x="%d" width="%d" height="20" fill="%s"/>'
             '<g fill="#fff" font-family="Verdana,sans-serif" font-size="11" '
             'text-anchor="middle"><text x="%d" y="14">%s</text>'
             '<text x="%d" y="14">%s</text></g></svg>'
-            % (width, emit.e(state), emit.e(state), width_left, width_left,
+            % (width, emit.e(title), emit.e(title), width_left, width_left,
                width_right, FILL[state], width_left // 2, emit.e(left),
-               width_left + width_right // 2, emit.e(state)))
+               width_left + width_right // 2, emit.e(label)))
 
 
 def shareable_badge(*, manifest: Manifest, packet, summaries: list[db.CertificateSummary],

@@ -5,10 +5,11 @@ Evidence packets for [autorate](https://github.com/Jackxiaozhiren/autorate). The
 their bytes, renders them, and replays them with a pinned distribution so a stranger can
 re-derive the same denominator without access to the producing organisation.
 
-This repository is **M2** of the Autorate Portal plan: M1's packet contract plus the replay
-engine — a job runner whose run rows carry argv, exit code and stdout hash; a pinned-distribution
-registry that can contradict a forged packet; and `doctor`. M3–M5 (auth, database, HTTP API,
-policies, in-browser verifier) are deliberately not implemented here.
+This repository carries the portal plan through **M5**: the packet contract and replay engine
+(`packet`, `verify-packet`, `run`, `doctor`, `monitor`), the HTTP service with org/project scoping,
+the certificate and slice views, claim checks, audit exports, versioned policies, scheduled replay
+records, administration, and the self-contained HTML checker. What it still does not do is compute
+a statistic: every number is read from an artefact or from a replay's captured output.
 
 ## Install
 
@@ -20,6 +21,48 @@ uv run --frozen autorate-portal --help
 Requires Python >= 3.10 and `pydantic>=2.6,<3`. Nothing else is needed for build / verify / html.
 `verify-packet` additionally needs network access to PyPI and either Docker or `uv`.
 
+A deployment must set `AUTHORATE_TOKEN_SALT` and `AUTHORATE_SECRET_KEY` to values other than the
+packaged defaults. `create_app` refuses to start otherwise: the defaults are in this source, so a
+portal that inherited them would accept share grants and session cookies signed by anyone who can
+read this file.
+
+## Run
+
+`autorate-portal serve` is the only command that binds a port. The image runs the migrations before
+the server (`alembic upgrade head && exec autorate-portal serve ...`), listens on 8000, stores
+packets under `/data/packets`, and runs as uid 10001. No layer carries a credential: the service
+refuses to start unless `AUTHORATE_TOKEN_SALT` and `AUTHORATE_SECRET_KEY` are supplied at run time,
+and `AUTHORATE_DB_URL` points at the database the migrations just updated.
+
+A person signs in once: `POST /api/v1/session` exchanges a project-scoped API token for an 8-hour
+signed cookie that names the project it was issued for. Writes authenticated by that cookie must
+carry `x-csrf-token` (double-submit); token-authenticated requests do not, because a typed token is
+not ambient authority. `DELETE /api/v1/session` clears both cookies. No password is stored and no
+token is written into the cookie.
+
+## Exports
+
+`export build` writes the same bundle the HTTP endpoint writes, from the same code path: every line
+carries the artefact path, its sha256, the protocol digest and the packet id, and `known_limits` is
+its own section that cannot be omitted. `export recheck` recomputes the bundle's hash from the file
+alone, so an auditor who was handed the packet and the bundle needs nothing from the portal.
+
+The hash covers the **canonical payload**, not the file's bytes: reformatting the JSON does not break
+it, changing a value does. A run store containing a `mismatch` row for the packet blocks the build
+before any line is assembled, naming the run; a later `certified` row supersedes it.
+
+## Vocabulary
+
+Four states used to share the word `certified`, and a reader could not tell which one a screen
+meant. The machine values are unchanged; the display terms are now distinct: `statistically
+feasible` for a certificate, `replay-consistent` for a run row, `verify passed` for the badge's
+accessible name, and `holds` for a monitor verdict. A monitor verdict can also be `not_certifiable`,
+`drift`, `configuration_bug`, `not_run`, `refused` or `failed`; `refused` exists because a replay
+the portal stopped (a bad pin, a tampered packet, a wheel set that does not fit this host) observed
+nothing and must not be reported as drift. Two exit codes are shared — `not_run`/`not_certifiable`
+at 3 and `refused`/`drift` at 4 — so a scheduler should alert on the printed verdict, not the code. `tests/test_vocabulary.py` compares the maps
+against each module's own state tuple, so a new state without a term fails the suite.
+
 ## Command surface
 
 | Command | Purpose |
@@ -30,9 +73,15 @@ Requires Python >= 3.10 and `pydantic>=2.6,<3`. Nothing else is needed for build
 | `autorate-portal verify-packet <packet.tar> [--backend container\|uv]` | AC9/AC10 replay of the pinned wheel |
 | `autorate-portal doctor [--backend ...] [--packet P]` | What this machine can be asked to do, before a replay is spent |
 | `autorate-portal run <packet.tar> [--backend ...] [--runs runs.jsonl]` | One replay job, recorded as a run row (AC4, I5) |
+| `autorate-portal monitor <packet.tar> [--backend ...] [--runs runs.jsonl]` | One scheduled replay with the CLI's own verdict vocabulary (F6) |
 | `autorate-portal runs list\|show --runs runs.jsonl` | Read the recorded rows back |
+| `autorate-portal export build <packet> --kind annex_iv\|iso_42001\|aap [-o out.json] [--runs runs.jsonl]` | F5: one deterministic bundle, or the named refusal |
+| `autorate-portal export recheck <bundle.json>` | Recompute a bundle's own hash from the file alone |
+| `autorate-portal serve [--host H] [--port P] [--store DIR]` | Run the HTTP service; the only command that binds a port |
 
-Build flags: `--version`, `--wheel`, `--wheel-sha256`, `--expected-rederived`, `--shareable`.
+Build flags: `--version`, `--wheel`, `--wheel-sha256`, `--expected-rederived`, `--shareable`, `--embed-wheel`.
+
+`--embed-wheel` may be repeated to put the pinned wheel and its dependency closure into the packet. A packet built this way is schema 2, lists every wheel as an artefact, and `verify-packet` installs it with no index at all; without the flag the packet stays schema 1 and replay still needs PyPI. The recorded platforms are checked before an install: a wheel set that cannot run on the replay interpreter is refused by name, and a failed install names the target image instead of surfacing as a bare exit code.
 The defaults pin `autorate==0.1.2`, wheel `autorate-0.1.2-py3-none-any.whl`, sha256
 `7709d3faa560417efcbd8066f6db79d741d995bbbb9b23d2d595ed2a6fb38205`.
 
@@ -58,6 +107,10 @@ PyPI — a reachable index must not be able to vouch for a forged manifest. Wide
 a reviewed change, not a fallback to "latest".
 
 ### Mismatch is not a pass
+
+Every run row records the channel it used: `online` when the pinned wheel was fetched, `offline`
+when the packet carried its wheel set. A row written before the field existed reads back as
+`unknown`, and `runs list` says how many such rows it found rather than implying either channel.
 
 `run` compares the replay's `re-derived N /M values` line with the packet's stored denominator, and
 the replay's stdout hash with the manifest's hash. When they disagree the row's `state` is
@@ -88,7 +141,12 @@ spellings (PRD §13.3 item 3): `bound_unit`, `protocol_digest`, `manifest_sha256
 The contract records: protocol digest and full sha256; `source_revision` and `source_version`;
 per-artefact `path`, `sha256`, `kind` and `bytes`; the pinned wheel's filename and sha256; the
 lane, the rubric, the expected `re-derived N /N` line; and `records_excluded` together with the
-explicit `excluded_records` list. `manifest_sha256` is the sha256 of the canonical JSON with that
+explicit `excluded_records` list.
+
+Schema 2 adds two required fields, `wheel_embedded` and `wheel_platforms` (derived from the wheel
+filenames, not typed by the builder), and wheel artefacts under `wheel/`. It is written only when
+the builder embedded a set that contains the pinned wheel; schema 1 packets stay readable, and a
+schema 1 manifest that carries a wheel artefact is refused. `manifest_sha256` is the sha256 of the canonical JSON with that
 field removed, so a one-character edit is detected before any artefact is read.
 
 ## Reproducibility
@@ -99,7 +157,9 @@ not a glob: a missing publication-table artefact is named by the build refusal.
 
 `verify-packet` fetches the pinned wheel from PyPI, checks its sha256 **before** running anything,
 installs it into an isolated location, and requires the replay to print
-`re-derived N /N values` matching the manifest. It records `argv`, `exit_code`,
+`re-derived N /N values` matching the manifest. When the packet embedded its wheel set, no
+fetch happens: the verifier reads the bytes it already hashed, installs with `--no-index` from
+the embedded wheelhouse, and a host without network is a supported host rather than a `not-run`. It records `argv`, `exit_code`,
 `stdout_sha256`, `digest_then`, `packet_id_in` and `state` in the §4.3 run-row shape. With no
 Docker or no network the result is a named `not-run` (AC10), never a certified result.
 

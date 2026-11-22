@@ -8,6 +8,12 @@ The rules this module makes structural:
 * **The vocabulary is the CLI's.** Exit ``0`` is ``holds``, ``3`` is
   ``not_certifiable``, ``4`` is ``drift``, ``2`` is ``configuration_bug``. A
   usage error is a bug in the deployment, not a red KPI, and it is named as one.
+  The replay's own ``state`` is read before its exit code, because a ``refused``
+  replay and a ``mismatch`` both exit 4 while meaning opposite things: a refusal
+  says the question was never asked (a tampered packet, a rejected pin, a wheel
+  set that does not fit this host), and drift says it was asked and the answer
+  changed. Reporting a refusal as drift would page an operator about a source
+  that never moved.
 * **A missing prerequisite is never green.** No Docker, no network, a rejected
   pin, a timeout: ``not_run``, with the doctor detail and - for a timeout - the
   hash of what the attempt had printed.
@@ -38,13 +44,20 @@ NOT_CERTIFIABLE = "not_certifiable"
 DRIFT = "drift"
 CONFIGURATION_BUG = "configuration_bug"
 NOT_RUN = "not_run"
+REFUSED = "refused"
 FAILED = "failed"
-VERDICTS = (HOLDS, NOT_CERTIFIABLE, DRIFT, CONFIGURATION_BUG, NOT_RUN, FAILED)
+VERDICTS = (HOLDS, NOT_CERTIFIABLE, DRIFT, CONFIGURATION_BUG, NOT_RUN, REFUSED, FAILED)
 
 #: F6 rule 2, verbatim, as a mapping rather than a chain of ifs.
 EXIT_VERDICT = {0: HOLDS, 3: NOT_CERTIFIABLE, 4: DRIFT, 2: CONFIGURATION_BUG}
+#: Two collisions are deliberate and are stated rather than avoided: ``not_run``
+#: shares 3 with ``not_certifiable`` (the replay's own code for "could not ask"),
+#: and ``refused`` shares 4 with ``drift`` (the tool's code for "did not pass").
+#: A scheduler that keys on the exit code alone cannot separate them; one that
+#: reads the printed verdict, or the run row's ``state``, can. Narrowing this
+#: would mean renumbering the tool's exit codes, which is a protocol change.
 VERDICT_RC = {HOLDS: 0, NOT_CERTIFIABLE: 3, DRIFT: 4, CONFIGURATION_BUG: 2,
-              NOT_RUN: 3, FAILED: 4}
+              NOT_RUN: 3, REFUSED: 4, FAILED: 4}
 
 
 @dataclass(frozen=True)
@@ -65,13 +78,46 @@ class MonitorOutcome:
                 "partial_stdout": self.partial}
 
 
+#: The container script's own code for "the wheel set did not install here".
+#: It is the one documented code that is not the tool speaking.
+INSTALL_SENTINEL = 97
+
+
 def verdict_for(row: RunRow) -> tuple[str, str]:
-    """(verdict, reason) from the replay's own exit code, never from a summary."""
+    """(verdict, reason) from the replay's own state and exit code, never a summary.
+
+    A row's exit code is the tool's answer only if the tool ran. Three cases have
+    to be separated before the table is consulted:
+
+    * ``not-run`` never started, so its code (or its absence) is not an answer.
+    * A ``refused`` row with **no** exit code was stopped by the portal itself -
+      packet integrity, a rejected pin, a wheel set that does not fit this host -
+      so nothing was observed and it cannot be drift.
+    * A ``refused`` row carrying :data:`INSTALL_SENTINEL` is the container script
+      reporting an install failure, which is a host fact, not the tool's verdict.
+
+    Anything else that exits with a code outside the documented four is
+    ``failed``: the process ran and broke the contract, and calling that either
+    ``not_run`` or ``configuration_bug`` would misname it.
+
+    ``mismatch`` is answered from the state, not the exit code, and the reason is
+    structural: the portal compares the re-derived denominator with the stored
+    one, so a replay that disagrees has still *succeeded* as a process and exits
+    0. Reading the code first reported a drift as ``holds`` - the exact inversion
+    this project exists to prevent, found by the T6 drill rather than by a unit
+    test, because every unit test injected the tool's own exit 4.
+    """
     if row.state == "not-run":
         return NOT_RUN, row.reason or "the replay could not run"
+    if row.state == "mismatch":
+        return DRIFT, row.reason or "the replay disagreed with the stored summary"
     code = row.exit_code
     if code is None:
+        if row.state == "refused":
+            return REFUSED, row.reason or "the replay refused before observing anything"
         return NOT_RUN, row.reason or "no exit code was recorded"
+    if row.state == "refused" and code == INSTALL_SENTINEL:
+        return REFUSED, row.reason or "the wheel set did not install on this target"
     if code in EXIT_VERDICT:
         verdict = EXIT_VERDICT[code]
         reason = row.reason

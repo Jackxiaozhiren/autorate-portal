@@ -27,7 +27,7 @@ def test_a_ready_machine_has_no_failing_check(built):
     checks = _examine(backend="container", packet_path=built[0], env=_env())
     assert [check.name for check in checks] == [
         "python", "version", "database", "uv", "docker", "container-network", "pypi",
-        "registry", "packet"]
+        "registry", "packet", "channel"]
     assert [check.name for check in checks if check.status == "fail"] == []
     assert exit_code(checks) == EXIT_OK
 
@@ -143,3 +143,21 @@ def test_a_password_in_the_database_url_is_not_printed():
                       db_url="postgresql://user:hunter2@127.0.0.1:9/none")
     detail = _check(checks, "database").detail
     assert "hunter2" not in detail and "***" in detail
+
+
+def test_an_offline_packet_makes_the_index_checks_not_required(offline_built):
+    checks = _examine(backend="container", packet_path=offline_built[0], env=_env(network=False))
+    channel = _check(checks, "channel")
+    assert channel.status == "ok" and "offline" in channel.detail
+    assert _check(checks, "pypi").status == "not-required"
+    assert _check(checks, "container-network").status == "not-required"
+    assert exit_code(checks) == EXIT_OK
+
+
+def test_an_online_packet_reports_the_online_channel(built):
+    checks = _examine(backend="container", packet_path=built[0], env=_env())
+    assert "online" in _check(checks, "channel").detail
+
+
+def test_without_a_packet_the_channel_is_not_decided():
+    assert _check(_examine(backend="container", env=_env()), "channel").status == "not-required"

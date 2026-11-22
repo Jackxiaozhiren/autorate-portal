@@ -190,3 +190,21 @@ def test_ac7_the_latest_observation_for_the_packet_wins(world, m4_replay_engine)
 def test_an_unknown_kind_is_a_named_refusal_not_a_generic_bundle(world):
     with pytest.raises(exports.ExportRefused, match="unknown bundle kind"):
         _build(world, "generic_aap")
+
+
+def test_the_manifest_alone_is_enough_to_build_a_bundle(world):
+    """The CLI has no database row; the identity must not depend on one."""
+    manifest, _packet, files = world
+    bundle = exports.build_bundle(kind="aap", manifest=manifest, files=files)
+    assert not bundle.blocked
+    assert bundle.protocol_digest == manifest.protocol_digest
+    assert all(line["packet_id"] == manifest.packet_id for line in bundle.lines)
+
+
+def test_a_stored_row_that_disagrees_with_the_manifest_is_refused(world):
+    """Two sources for one identity may agree or fail; never quietly pick one."""
+    manifest, _packet, files = world
+    lying = SimpleNamespace(id="pkt-row-1", protocol_digest="000000000000")
+    with pytest.raises(exports.ExportRefused) as exc:
+        exports.build_bundle(kind="aap", manifest=manifest, packet=lying, files=files)
+    assert "disagree on the protocol digest" in str(exc.value)

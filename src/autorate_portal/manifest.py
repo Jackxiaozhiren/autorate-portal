@@ -12,19 +12,38 @@ import json
 import re
 from typing import Any, Literal
 
+from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HASH_LABEL = re.compile(r"^[0-9a-f]{12}$")
 REDERIVED = re.compile(r"^[0-9]+ /[0-9]+$")
 RELATIVE_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._/\-]*$")
-KINDS = ("certificate", "document", "records", "protocol", "transcript")
+KINDS = ("certificate", "document", "records", "protocol", "transcript", "wheel")
 
 
 def canonical_bytes(payload: dict[str, Any]) -> bytes:
     """One canonical form for hashing: sorted keys, no whitespace, UTF-8."""
     return json.dumps(payload, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False).encode("utf-8")
+
+
+def wheel_platforms_for(paths: list[str]) -> list[str]:
+    """The platform tags a wheel set can install on, derived from its filenames.
+
+    Derived rather than declared: a field a builder can type is a field that can
+    disagree with the bytes next to it. ``any`` is kept as a platform value
+    because it is the honest answer for a pure-Python wheel.
+    """
+    platforms: set[str] = set()
+    for path in paths:
+        name = path.rsplit("/", 1)[-1]
+        try:
+            _, _, _, tags = parse_wheel_filename(name)
+        except InvalidWheelFilename as exc:
+            raise ValueError("wheel filename is not parseable: %s (%s)" % (name, exc)) from exc
+        platforms.update(tag.platform for tag in tags)
+    return sorted(platforms)
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -59,7 +78,7 @@ class Artefact(BaseModel):
 
     path: str
     sha256: str
-    kind: Literal["certificate", "document", "records", "protocol", "transcript"]
+    kind: Literal["certificate", "document", "records", "protocol", "transcript", "wheel"]
     bytes: int = Field(ge=0)
 
     @field_validator("path")
@@ -74,7 +93,11 @@ class Artefact(BaseModel):
 
 
 class Distribution(BaseModel):
-    """The pinned wheel a stranger must be able to fetch from PyPI (I6)."""
+    """The pinned wheel a replay installs.
+
+    Schema 1 fetches it from the index; schema 2 may carry it inside the packet,
+    which is what lets a host without egress replay at all.
+    """
     model_config = ConfigDict(extra="forbid")
 
     name: str
@@ -160,7 +183,56 @@ class Manifest(BaseModel):
             raise ValueError("excluded_records is non-empty but records_excluded is false")
         if self.protocol_sha256[:12] != self.protocol_digest:
             raise ValueError("protocol_digest is not the 12-character prefix of protocol_sha256")
+        if self.schema_version == "1" and any(a.kind == "wheel" for a in self.artifacts):
+            raise ValueError("schema 1 packets cannot carry wheel artefacts; embedding requires schema 2")
         return self
+
+    @property
+    def embeds_wheel(self) -> bool:
+        """Schema 1 cannot embed a wheel; the accessor keeps callers version-agnostic."""
+        return False
 
     def as_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
+
+
+class ManifestV2(Manifest):
+    """Schema 2: the packet may carry the wheel set a replay needs.
+
+    The embedded set is evidence like any other artefact - each wheel is listed
+    with its sha256 and byte count, so a replay that uses one can say which bytes
+    it used. The flag is explicit rather than inferred from the artefacts because
+    "this packet is replayable offline" is a claim, and a claim needs a field
+    somebody can be held to.
+    """
+
+    schema_version: Literal["2"]
+    wheel_embedded: bool
+    wheel_platforms: list[str]
+
+    @property
+    def embeds_wheel(self) -> bool:
+        return self.wheel_embedded
+
+    @model_validator(mode="after")
+    def _wheel_set(self) -> "ManifestV2":
+        wheels = {a.path.rsplit("/", 1)[-1] for a in self.artifacts if a.kind == "wheel"}
+        misplaced = [a.path for a in self.artifacts
+                     if (a.kind == "wheel") != a.path.startswith("wheel/")]
+        if misplaced:
+            raise ValueError("wheel artefacts live under wheel/ and nowhere else: %s"
+                             % ", ".join(sorted(misplaced)))
+        if self.wheel_embedded:
+            if not wheels:
+                raise ValueError("wheel_embedded is true but no wheel artefact is declared")
+            if self.distribution.wheel not in wheels:
+                raise ValueError("the embedded set does not carry the pinned wheel %s"
+                                 % self.distribution.wheel)
+            derived = wheel_platforms_for([a.path for a in self.artifacts if a.kind == "wheel"])
+            if self.wheel_platforms != derived:
+                raise ValueError(
+                    "wheel_platforms does not match the declared wheels: declared %s, derived %s"
+                    % (self.wheel_platforms, derived))
+        elif wheels or self.wheel_platforms:
+            raise ValueError("wheel artefacts are declared but wheel_embedded is false")
+        return self

@@ -10,8 +10,10 @@ only for the status code.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +40,40 @@ from .views import (certificate_panel, packet_header, slice_companion, slice_con
 
 WEB_DIR = Path(__file__).parent / "web"
 DEFAULT_SALT = "autorate-portal-salt"
+DEFAULT_SECRET = "dev-only"
+SESSION_COOKIE = "session"
+CSRF_COOKIE = "csrf"
+SESSION_TTL_SECONDS = 8 * 3600
+SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+
+
+class ConfigurationError(RuntimeError):
+    """A deployment asked to start on a credential this source publishes.
+
+    The two defaults below live in the repository, so a deployment that inherits
+    them is not merely weak: anyone who can read this file can sign a session
+    cookie or a share grant the portal will accept. A warning in a log is not a
+    control, so construction refuses instead of starting.
+    """
+
+
+def _credential(explicit: str | None, *, env_name: str, default: str, what: str,
+                problems: list[str]) -> str:
+    """Resolve one credential, or record why it cannot be used.
+
+    Explicit arguments win over the environment because every test fixture
+    supplies its own pair; that seam is also how an operator can inject a
+    secret without exporting it. What is refused in every path is the packaged
+    value, including when it arrives through the environment.
+    """
+    value = explicit if explicit is not None else os.environ.get(env_name)
+    if value is None or not value.strip():
+        problems.append("%s: set %s" % (what, env_name))
+        return default
+    if value == default:
+        problems.append("%s: %s still carries the packaged default" % (what, env_name))
+        return default
+    return value
 
 
 @dataclass(frozen=True)
@@ -107,6 +143,16 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     """``monitor_env`` is a test seam: a replay environment the suite injects so a
     monitor test does not spend a real container. Production leaves it None and
     the engine probes the machine."""
+    problems: list[str] = []
+    resolved_salt = _credential(salt, env_name="AUTHORATE_TOKEN_SALT", default=DEFAULT_SALT,
+                                what="token salt", problems=problems)
+    resolved_secret = _credential(secret_key, env_name="AUTHORATE_SECRET_KEY",
+                                  default=DEFAULT_SECRET, what="session/share secret",
+                                  problems=problems)
+    if problems:
+        raise ConfigurationError(
+            "refusing to start: %s. The packaged defaults are published in this source, "
+            "so they cannot sign a session or a share grant." % "; ".join(problems))
     engine = engine or db.make_engine()
     sessions = db.make_session(engine)
     app = FastAPI(title="autorate portal", version="0.1.0")
@@ -120,8 +166,8 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     # base path; pin an absolute path with the env var in a deployment.
     app.state.run_store = Path(run_store) if run_store is not None else Path(
         os.environ.get("AUTORATE_RUN_STORE") or (app.state.store_dir / "runs.jsonl"))
-    app.state.salt = salt or os.environ.get("AUTHORATE_TOKEN_SALT") or DEFAULT_SALT
-    app.state.secret_key = secret_key or os.environ.get("AUTHORATE_SECRET_KEY") or "dev-only"
+    app.state.salt = resolved_salt
+    app.state.secret_key = resolved_secret
     app.state.monitor_env = monitor_env
     # The registry a deployment replays against. The packaged pins are the
     # default; pointing this at another file is a reviewed deployment choice,
@@ -147,11 +193,27 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
             if asked and asked != found.project_id:
                 raise HTTPException(status_code=403, detail="this credential is scoped to another project")
             return found
-        cookie = request.cookies.get("session", "")
-        email = auth.read_session(app.state.secret_key, cookie) if cookie else None
-        project_id = asked
-        if not email or not project_id:
+        cookie = request.cookies.get(SESSION_COOKIE, "")
+        claims = auth.read_session_claims(app.state.secret_key, cookie) if cookie else None
+        if claims is None:
             raise HTTPException(status_code=401, detail="no token and no session")
+        email, project_in_cookie = claims
+        project_id = asked or project_in_cookie
+        if not project_id:
+            raise HTTPException(status_code=401, detail="the session names no project")
+        if asked and project_in_cookie and asked != project_in_cookie:
+            raise HTTPException(status_code=403,
+                                detail="this session is scoped to another project")
+        # A cookie is ambient authority: the browser attaches it to any request a
+        # page makes. Writes therefore need a value the page can only read from
+        # its own origin. Token requests are exempt - a caller that types a token
+        # is not being driven by another site.
+        if request.method not in SAFE_METHODS:
+            expected = request.cookies.get(CSRF_COOKIE, "")
+            supplied = request.headers.get("x-csrf-token", "")
+            if not expected or not hmac.compare_digest(supplied, expected):
+                raise HTTPException(status_code=403,
+                                    detail="a session-authenticated write needs the csrf token")
         try:
             return auth.principal_for_project(session, email=email, project_id=project_id)
         except auth.AuthError as exc:
@@ -176,6 +238,53 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
     def version() -> dict[str, str]:
         from . import __version__
         return {"version": __version__, "autorate": "0.1.2"}
+
+    @app.post("/api/v1/session")
+    def create_session(body: dict, request: Request, response: Response,
+                       session: Session = Depends(session_dependency)) -> dict:
+        """Exchange a project token for a session cookie, once.
+
+        The token is not stored in the cookie and not echoed back; the cookie
+        carries the actor and the project, signed. The CSRF value is readable by
+        the page by design - it is a double-submit check, not a secret.
+        """
+        token = str(body.get("token") or "")
+        if not token:
+            raise HTTPException(status_code=422, detail="a project token is required")
+        try:
+            who = auth.principal_from_token(session, token, salt=app.state.salt)
+        except auth.AuthError as exc:
+            raise HTTPException(status_code=401, detail="the token was not accepted") from exc
+        # A token's actor is a user id; a session names a person by email. The
+        # cookie must carry the identifier the session reader resolves, or every
+        # later request fails to find the user it just authenticated.
+        user = session.get(db.User, who.actor)
+        if user is None:
+            raise HTTPException(status_code=401, detail="the token's user no longer exists")
+        csrf = secrets.token_urlsafe(32)
+        secure = request.url.scheme == "https" or os.environ.get("AUTHORATE_COOKIE_SECURE") == "1"
+        response.set_cookie(SESSION_COOKIE,
+                            auth.sign_session(app.state.secret_key, user.email,
+                                              project_id=who.project_id),
+                            max_age=SESSION_TTL_SECONDS, httponly=True, samesite="lax",
+                            secure=secure, path="/")
+        response.set_cookie(CSRF_COOKIE, csrf, max_age=SESSION_TTL_SECONDS, httponly=False,
+                            samesite="lax", secure=secure, path="/")
+        auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                          action="session.issued", target="project:%s" % who.project_id)
+        session.commit()
+        return {"actor": user.email, "role": who.role, "project_id": who.project_id,
+                "csrf": csrf}
+
+    @app.delete("/api/v1/session")
+    def delete_session(response: Response, who: auth.Principal = Depends(principal),
+                       session: Session = Depends(session_dependency)) -> dict:
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(CSRF_COOKIE, path="/")
+        auth.record_audit(session, actor=who.actor, project_id=who.project_id,
+                          action="session.revoked", target="project:%s" % who.project_id)
+        session.commit()
+        return {"ok": True}
 
     @app.post("/api/v1/packets", status_code=201)
     def create_packet(file: UploadFile, request: Request,
@@ -317,7 +426,9 @@ def create_app(*, engine=None, store_dir: Path | None = None, salt: str | None =
         try:
             claim = claims_module.Claim.from_dict(body)
         except claims_module.ClaimError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            # The refusal is data, not a fixed English sentence: the same 422
+            # answers in the locale the caller asked for.
+            raise HTTPException(status_code=422, detail=exc.localized(locale)) from exc
         context = _evidence_context(session, app.state.store_dir, who,
                                     request.query_params.get("packet"))
         if context is None:

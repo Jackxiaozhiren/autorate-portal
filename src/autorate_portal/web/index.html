@@ -30,6 +30,20 @@
   .boundary { border-top: 2px dashed #c0392b; padding: 6px 0; font-size: 13px; }
   :focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
   pre { overflow-x: auto; font-size: 12px; }
+  @media print {
+    @page { size: A4; margin: 18mm; }
+    /* Paper is white and the screen preference is not the paper's. Without
+       this, a dark system preference prints white text on white paper: the
+       sheet looks blank and the verdict is lost. */
+    :root { color-scheme: light; }
+    html, body { background: #fff; color: #000; }
+    body { max-width: none; margin: 0; padding: 0; font-size: 11pt; }
+    .row, button, select, input, #error { display: none; }
+    .panel, .card, table { break-inside: avoid; }
+    .banner { border-left-color: #000; }
+    .muted, .triple { color: #444; }
+    tbody tr:hover { background: transparent; }
+  }
 </style>
 </head>
 <body>
@@ -46,11 +60,25 @@
   <label><span data-i18n="label.token">API token</span>
     <input id="token" type="password" autocomplete="off" placeholder="project-scoped token">
   </label>
-  <button id="load" data-i18n="label.load">Load certificates</button>
+  <button id="signin" data-i18n="label.signin">Sign in</button>
+  <button id="refresh" data-i18n="label.refresh">Refresh</button>
+  <button id="signout" data-i18n="label.signout">Sign out</button>
   <button id="clear" data-i18n="label.clear">Clear</button>
 </div>
 <p class="error" id="error" role="alert"></p>
 
+<h2 data-i18n="label.check_claim">Check a claim</h2>
+<p class="muted" data-i18n="text.claim_intro">A claim is checked against this project's certificates. Three answers are possible, and "cannot be bounded" is a result, not a failure.</p>
+<div class="row">
+  <label><span data-i18n="label.share">share</span><input id="claim-share" value="0.66"></label>
+  <label><span data-i18n="label.field">field</span><input id="claim-field" value="confidence"></label>
+  <label><span data-i18n="label.unit">unit</span><input id="claim-unit" value="case"></label>
+  <label><span data-i18n="label.population">population</span><input id="claim-population" value="resolutions"></label>
+  <button id="check" data-i18n="label.check_claim">Check a claim</button>
+</div>
+<section id="verdict" aria-live="polite"></section>
+
+<h2 data-i18n="label.certificates">Certificates</h2>
 <table id="certificates" hidden>
   <thead>
     <tr>
@@ -61,18 +89,7 @@
   </thead>
   <tbody></tbody>
 </table>
-
 <section id="detail" aria-live="polite"></section>
-
-<h2 data-i18n="label.check_claim">Check a claim</h2>
-<div class="row">
-  <label><span data-i18n="label.share">share</span><input id="claim-share" value="0.66"></label>
-  <label><span data-i18n="label.field">field</span><input id="claim-field" value="confidence"></label>
-  <label><span data-i18n="label.unit">unit</span><input id="claim-unit" value="case"></label>
-  <label><span data-i18n="label.population">population</span><input id="claim-population" value="resolutions"></label>
-  <button id="check" data-i18n="label.check_claim">Check a claim</button>
-</div>
-<section id="verdict" aria-live="polite"></section>
 
 <div class="row">
   <button id="badge">shareable badge</button>
@@ -93,7 +110,7 @@
 // numeric markup from data it has not received rendered. It formats nothing
 // numeric. All display strings come from the server's single message catalog;
 // there is no second, drifting copy of the translations here.
-const state = { token: "", rows: [], locale: "en", messages: {} };
+const state = { token: "", signedIn: false, csrf: "", rows: [], locale: "en", messages: {} };
 const el = (id) => document.getElementById(id);
 
 function msg(key, fallback) { return state.messages[key] || fallback; }
@@ -120,7 +137,10 @@ async function loadMessages() {
 }
 
 async function call(path, options = {}) {
-  const headers = Object.assign({"x-api-token": state.token}, options.headers || {});
+  const headers = Object.assign({}, options.headers || {});
+  const method = (options.method || "GET").toUpperCase();
+  if (!state.signedIn && state.token) { headers["x-api-token"] = state.token; }
+  if (state.signedIn && method !== "GET" && state.csrf) { headers["x-csrf-token"] = state.csrf; }
   const response = await fetch(withLocale(path), Object.assign({}, options, { headers }));
   if (!response.ok) {
     let detail = response.status + " " + response.statusText;
@@ -156,10 +176,42 @@ async function openCertificate(id) {
   } catch (error) { say(error.message); }
 }
 
-async function load() {
-  state.token = el("token").value.trim();
+async function signIn() {
+  const token = el("token").value.trim();
   say("");
-  if (!state.token) { say(msg("label.token", "a project-scoped token is required")); return; }
+  if (!token) { say(msg("label.token", "a project-scoped token is required")); return; }
+  try {
+    const response = await fetch("/api/v1/session", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify({token})
+    });
+    if (!response.ok) {
+      let detail = response.status + " " + response.statusText;
+      try { detail = (await response.json()).detail || detail; } catch (ignored) {}
+      throw new Error(detail);
+    }
+    const body = await response.json();
+    state.signedIn = true;
+    state.csrf = body.csrf;
+    state.token = "";
+    el("token").value = "";
+    await load();
+  } catch (error) { say(error.message); }
+}
+
+async function signOut() {
+  try { await call("/api/v1/session", {method: "DELETE"}); } catch (ignored) {}
+  state.signedIn = false;
+  state.csrf = "";
+  el("token").value = "";
+  el("certificates").hidden = true;
+  el("detail").replaceChildren();
+  say("");
+}
+
+async function load() {
+  say("");
+  if (!state.signedIn && !state.token) { say(msg("label.token", "a project-scoped token is required")); return; }
   try {
     const response = await call("/api/v1/certificates");
     const rows = await response.json();
@@ -214,13 +266,17 @@ el("locale").addEventListener("change", async (event) => {
   state.locale = event.target.value;
   await loadMessages();
 });
-el("load").addEventListener("click", load);
+el("signin").addEventListener("click", signIn);
+el("refresh").addEventListener("click", load);
+el("signout").addEventListener("click", signOut);
 el("check").addEventListener("click", checkClaim);
 el("badge").addEventListener("click", showBadge);
 el("trend").addEventListener("click", showTrend);
 el("export").addEventListener("click", buildExport);
 el("clear").addEventListener("click", () => {
   state.token = "";
+  state.signedIn = false;
+  state.csrf = "";
   el("token").value = "";
   el("detail").replaceChildren();
   el("verdict").replaceChildren();

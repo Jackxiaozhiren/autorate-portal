@@ -59,17 +59,24 @@ def _docker(backend: str, env: Environment) -> Check:
     return Check("docker", "ok" if env.docker_available else "fail", env.docker_detail)
 
 
-def _container_network(backend: str, env: Environment, image: str, probe) -> Check:
+def _container_network(backend: str, env: Environment, image: str, probe,
+                       offline: bool = False) -> Check:
     """Egress from inside the container, which the host-level probe cannot see."""
     if backend != "container":
         return Check("container-network", "not-required", "only the container backend needs it")
+    if offline:
+        return Check("container-network", "not-required",
+                     "the packet carries its wheel set; no index is contacted")
     if not env.docker_available:
         return Check("container-network", "not-required", "docker itself already failed")
     reachable, detail = probe(image)
     return Check("container-network", "ok" if reachable else "fail", detail)
 
 
-def _pypi(env: Environment) -> Check:
+def _pypi(env: Environment, offline: bool = False) -> Check:
+    if offline:
+        return Check("pypi", "not-required",
+                     "the packet carries its wheel set; no index is contacted")
     if env.network_available:
         return Check("pypi", "ok", env.network_detail)
     return Check("pypi", "fail", env.network_detail)
@@ -111,14 +118,25 @@ def _database(url: str | None = None) -> Check:
     return Check("database", "ok", "%s; reachable" % _redact(target))
 
 
-def _packet(packet_path: Path | None) -> Check:
+def _packet(packet_path: Path | None, verification=None) -> Check:
     if packet_path is None:
         return Check("packet", "not-required", "no packet was given")
-    verification = verify_bundle(Path(packet_path))
+    verification = verification or verify_bundle(Path(packet_path))
     if verification.ok:
         return Check("packet", "ok", str(packet_path))
     return Check("packet", "fail", "; ".join("%s: %s" % (r.path, r.reason)
                                              for r in verification.refusals))
+
+
+def _channel(packet_path: Path | None, verification=None) -> Check:
+    """Which route a replay of this packet would take, decided before it is spent."""
+    if packet_path is None:
+        return Check("channel", "not-required", "no packet was given")
+    if verification is None or not verification.ok or verification.manifest is None:
+        return Check("channel", "not-required", "the packet did not verify")
+    if verification.manifest.embeds_wheel:
+        return Check("channel", "ok", "offline: the packet carries its wheel set")
+    return Check("channel", "ok", "online: the pinned wheel is fetched from the index")
 
 
 def examine(*, backend: str = "container", registry_path: Path | None = None,
@@ -126,10 +144,15 @@ def examine(*, backend: str = "container", registry_path: Path | None = None,
             image: str = DEFAULT_IMAGE, db_url: str | None = None,
             container_probe=probe_container_network) -> list[Check]:
     environment = env or probe_environment(image=image)
+    verification = verify_bundle(Path(packet_path)) if packet_path is not None else None
+    offline = bool(verification is not None and verification.ok
+                   and verification.manifest is not None
+                   and verification.manifest.embeds_wheel)
     return [_python(), _version(registry_path), _database(db_url), _uv(backend),
             _docker(backend, environment),
-            _container_network(backend, environment, image, container_probe),
-            _pypi(environment), _registry(registry_path), _packet(packet_path)]
+            _container_network(backend, environment, image, container_probe, offline),
+            _pypi(environment, offline), _registry(registry_path),
+            _packet(packet_path, verification), _channel(packet_path, verification)]
 
 
 def exit_code(checks: list[Check]) -> int:

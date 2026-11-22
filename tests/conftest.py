@@ -70,6 +70,23 @@ def built(tmp_path, source_tree, build_kwargs):
     return out, manifest, raw
 
 
+OFFLINE_WHEEL_BYTES = b"offline-fixture-autorate-wheel"
+OFFLINE_DEP_NAME = "numpy-2.2.0-py3-none-any.whl"
+OFFLINE_DEP_BYTES = b"offline-fixture-numpy-wheel"
+
+
+@pytest.fixture
+def offline_built(tmp_path, source_tree, build_kwargs):
+    """A schema 2 packet: the pinned wheel plus one dependency, both local."""
+    kwargs = dict(build_kwargs, wheel_sha256=sha256_bytes(OFFLINE_WHEEL_BYTES))
+    out = tmp_path / "offline.packet.tar"
+    manifest, raw = build(source_tree, out,
+                          embedded_wheels={DEFAULT_WHEEL: OFFLINE_WHEEL_BYTES,
+                                           OFFLINE_DEP_NAME: OFFLINE_DEP_BYTES},
+                          **kwargs)
+    return out, manifest, raw
+
+
 def rewrite_bundle(path: Path, files: dict[str, bytes], manifest_bytes: bytes) -> bytes:
     """Write a test bundle with fixed tar metadata (our own writer, not a glob)."""
     entries = [("manifest.json", manifest_bytes)] + sorted(files.items())

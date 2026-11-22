@@ -95,6 +95,11 @@ def number_with_unit(locale: str, value: Any, unit: Any) -> str:
     return t(locale, "fmt.number_with_unit", value=value, unit=word)
 
 
+#: The states a certificate screen may render. Exported so the display
+#: vocabulary's coverage test compares against this tuple rather than a copy.
+RENDER_STATES = ("certified", "refusal", "unavailable")
+
+
 def state_word(locale: str, state: str) -> str:
     """F2/I3 render states; the artefact's refusal *reason* is not translated."""
     mapping = {"certified": "state.certified", "refusal": "state.refusal",

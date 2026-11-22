@@ -224,3 +224,110 @@ def test_a_bad_frequency_is_a_named_422(tmp_path, m4_built):
                            json={"packet_id": "pkt-x", "frequency": "daily"})
     assert response.status_code == 422
     assert "five fields" in response.json()["detail"]
+
+
+def test_a_series_keeps_not_run_and_drift_apart_with_their_own_words(tmp_path, m4_built):
+    """Three observations of one packet: only two of them observed anything.
+
+    A `not_run` says the host could not ask the question; a `drift` says the
+    answer changed. Collapsing either into the other is the misreport this
+    project exists to prevent, so the series is read back as a whole.
+    """
+    packet, registry = _packet_and_registry(tmp_path, m4_built)
+    session = _session()
+    store = tmp_path / "runs.jsonl"
+
+    first = monitor.observe(session, project_id="prj-1", packet_path=packet,
+                            store_path=store, registry_path=registry,
+                            env=_env(ready=False))
+    second = monitor.observe(session, project_id="prj-1", packet_path=packet,
+                             store_path=store, registry_path=registry,
+                             env=_env(rc=4, stdout=STDOUT_OK + "DRIFT: cert laya.bound\n"))
+    third = monitor.observe(session, project_id="prj-1", packet_path=packet,
+                            store_path=store, registry_path=registry, env=_env())
+
+    assert [first.verdict, second.verdict, third.verdict] == [
+        monitor.NOT_RUN, monitor.DRIFT, monitor.HOLDS]
+    assert first.doctor, "a not-run carries the doctor output that explains it"
+    assert second.summary_line == "re-derived 612 /612 values"
+
+    series = monitor.results_for(session, "prj-1", store)
+    assert [item["verdict"] for item in series] == [
+        monitor.NOT_RUN, monitor.DRIFT, monitor.HOLDS]
+    assert [item["exit_code"] for item in series] == [None, 4, 0]
+    assert series[0]["started_at"] <= series[1]["started_at"] <= series[2]["started_at"]
+    assert len(store.read_text().splitlines()) == 3, "one row per observation, appended"
+
+
+def test_the_series_orders_by_append_order_not_by_verdict(tmp_path, m4_built):
+    """A later green does not move an earlier red; the list is chronological."""
+    packet, registry = _packet_and_registry(tmp_path, m4_built)
+    session = _session()
+    store = tmp_path / "runs.jsonl"
+
+    monitor.observe(session, project_id="prj-1", packet_path=packet, store_path=store,
+                    registry_path=registry, env=_env(rc=4, stdout=STDOUT_OK))
+    monitor.observe(session, project_id="prj-1", packet_path=packet, store_path=store,
+                    registry_path=registry, env=_env())
+
+    series = monitor.results_for(session, "prj-1", store)
+    assert [item["verdict"] for item in series] == [monitor.DRIFT, monitor.HOLDS]
+    assert series[-1]["verdict"] == monitor.HOLDS
+
+
+def test_a_refusal_without_an_exit_code_is_not_drift():
+    """The portal stopped it: no observation happened, so nothing drifted."""
+    verdict, reason = monitor.verdict_for(
+        _row(state="refused", exit_code=None, reason="packet integrity check failed"))
+    assert verdict == monitor.REFUSED
+    assert "integrity" in reason
+
+
+def test_an_install_failure_is_a_refusal_not_drift():
+    verdict, _reason = monitor.verdict_for(
+        _row(state="refused", exit_code=monitor.INSTALL_SENTINEL,
+             reason="the replay's install step failed inside python:3.13-slim"))
+    assert verdict == monitor.REFUSED
+
+
+def test_a_wheel_set_that_does_not_fit_this_host_is_refused_not_drift(
+        tmp_path, source_tree, build_kwargs):
+    """T8's refusal, seen through the monitor: a host fact, not a source change."""
+    from autorate_portal.packet import build
+    from conftest import DEFAULT_WHEEL, OFFLINE_DEP_BYTES, OFFLINE_WHEEL_BYTES
+
+    packet = tmp_path / "windows.packet.tar"
+    build(source_tree, packet,
+          embedded_wheels={DEFAULT_WHEEL: OFFLINE_WHEEL_BYTES,
+                           "numpy-2.2.0-cp313-cp313-win_amd64.whl": OFFLINE_DEP_BYTES},
+          **dict(build_kwargs, wheel_sha256=sha256_bytes(OFFLINE_WHEEL_BYTES)))
+
+    def no_fetch(_name):
+        raise AssertionError("the index was consulted for an embedded packet")
+
+    registry = tmp_path / "pins.json"
+    registry.write_text(json.dumps({"schema": "test", "pins": [
+        {"name": "autorate", "version": DEFAULT_VERSION, "wheel": DEFAULT_WHEEL,
+         "sha256": sha256_bytes(OFFLINE_WHEEL_BYTES),
+         "source": "https://pypi.org/pypi/autorate/%s/json" % DEFAULT_VERSION}]}),
+        encoding="utf-8")
+    env = Environment(docker_available=False, network_available=False,
+                      docker_detail="not asked", network_detail="not asked",
+                      runner=None, wheel_fetcher=no_fetch)
+    outcome = monitor.observe(None, project_id="", packet_path=packet,
+                              store_path=tmp_path / "runs.jsonl",
+                              backend="uv", env=env, registry_path=registry)
+
+    assert outcome.verdict == monitor.REFUSED
+    assert "do not install on this interpreter" in outcome.reason
+    assert monitor.VERDICT_RC[outcome.verdict] == 4
+
+
+def test_a_disagreement_that_exited_zero_is_still_drift():
+    """The process succeeded; the comparison is the portal's. Exit 0 is not a pass."""
+    verdict, reason = monitor.verdict_for(
+        _row(state="mismatch", exit_code=0,
+             reason="stored denominator 590 /612 disagrees with the replay's 612 /612"))
+    assert verdict == monitor.DRIFT
+    assert monitor.VERDICT_RC[verdict] == 4
+    assert "disagrees" in reason

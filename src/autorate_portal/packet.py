@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .manifest import (Artefact, Distribution, Manifest, canonical_bytes,
-                       payload_sha256, sha256_bytes)
+from .manifest import (Artefact, Distribution, Manifest, ManifestV2,
+                       canonical_bytes, payload_sha256, sha256_bytes, wheel_platforms_for)
 
 MANIFEST_NAME = "manifest.json"
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024
@@ -123,10 +123,38 @@ def _packet_id(protocol_digest: str, source_revision: str,
     return "pkt-" + sha256_bytes(basis)[:16]
 
 
+def _merge_wheels(files: dict[str, bytes], embedded: dict[str, bytes]) -> None:
+    """Add the embedded wheel set under wheel/, refusing names that could escape it."""
+    for filename, data in sorted(embedded.items()):
+        if "/" in filename or "\\" in filename or not filename.endswith(".whl"):
+            raise ValueError("an embedded wheel must be a bare .whl filename: %r" % filename)
+        path = "wheel/" + filename
+        if path in files:
+            raise ValueError("embedded wheel path collides with an artefact: %s" % path)
+        files[path] = data
+
+
 def build_manifest(files: dict[str, bytes], *, source_revision: str,
                    source_version: str, wheel_filename: str, wheel_sha256: str,
                    expected_rederived: str, shareable: bool,
-                   excluded_records: list[str]) -> Manifest:
+                   excluded_records: list[str],
+                   embedded_wheels: dict[str, bytes] | None = None) -> Manifest:
+    embedded = dict(embedded_wheels or {})
+    kinds = {path: ("wheel" if path.startswith("wheel/") else kind)
+             for path, kind in ARTEFACT_PLAN}
+    for path in files:
+        if path.startswith("wheel/"):
+            kinds[path] = "wheel"
+    if embedded:
+        if wheel_filename not in embedded:
+            raise ValueError("the embedded set does not contain the pinned wheel %s" % wheel_filename)
+        actual = sha256_bytes(embedded[wheel_filename])
+        if actual != wheel_sha256:
+            raise ValueError(
+                "pinned wheel sha256 mismatch: embedded bytes hash to %s, the packet would "
+                "declare %s" % (actual, wheel_sha256))
+        platforms = wheel_platforms_for(["wheel/" + name for name in embedded])
+
     protocol = json.loads(files["protocol.json"])
     rubric = protocol["rubric"]
     protocol_sha256 = sha256_bytes(files["protocol.json"])
@@ -134,13 +162,13 @@ def build_manifest(files: dict[str, bytes], *, source_revision: str,
 
     artefacts = [
         Artefact(path=path, sha256=sha256_bytes(files[path]),
-                 kind=dict(ARTEFACT_PLAN)[path], bytes=len(files[path])).model_dump(mode="json")
+                 kind=kinds[path], bytes=len(files[path])).model_dump(mode="json")
         for path in sorted(files)
     ]
     packet_id = _packet_id(protocol_digest, source_revision, artefacts, shareable)
 
     payload: dict[str, Any] = {
-        "schema_version": "1",
+        "schema_version": "2" if embedded else "1",
         "packet_id": packet_id,
         "protocol_digest": protocol_digest,
         "protocol_sha256": protocol_sha256,
@@ -156,8 +184,11 @@ def build_manifest(files: dict[str, bytes], *, source_revision: str,
         "records_excluded": shareable,
         "excluded_records": excluded_records,
     }
+    if embedded:
+        payload["wheel_embedded"] = True
+        payload["wheel_platforms"] = platforms
     full = {**payload, "manifest_sha256": sha256_bytes(canonical_bytes(payload))}
-    return Manifest.model_validate(full)
+    return (ManifestV2 if embedded else Manifest).model_validate(full)
 
 
 def write_bundle(out: Path, manifest: Manifest, files: dict[str, bytes]) -> bytes:
@@ -185,14 +216,17 @@ def write_bundle(out: Path, manifest: Manifest, files: dict[str, bytes]) -> byte
 
 def build(source: Path, out: Path, *, source_revision: str, source_version: str,
           wheel_filename: str, wheel_sha256: str, expected_rederived: str,
-          shareable: bool = False) -> tuple[Manifest, bytes]:
+          shareable: bool = False,
+          embedded_wheels: dict[str, bytes] | None = None) -> tuple[Manifest, bytes]:
     files, excluded = _read_source(source, shareable)
+    _merge_wheels(files, dict(embedded_wheels or {}))
     manifest = build_manifest(files, source_revision=source_revision,
                               source_version=source_version,
                               wheel_filename=wheel_filename,
                               wheel_sha256=wheel_sha256,
                               expected_rederived=expected_rederived,
-                              shareable=shareable, excluded_records=excluded)
+                              shareable=shareable, excluded_records=excluded,
+                              embedded_wheels=embedded_wheels)
     return manifest, write_bundle(out, manifest, files)
 
 
@@ -239,7 +273,8 @@ def parse_manifest(raw: bytes) -> tuple[Manifest | None, Refusal | None]:
         return None, Refusal(MANIFEST_NAME, "manifest self-hash does not match",
                              expected=str(declared), actual=computed)
     try:
-        return Manifest.model_validate(document), None
+        model = ManifestV2 if document.get("schema_version") == "2" else Manifest
+        return model.model_validate(document), None
     except ValueError as exc:
         return None, Refusal(MANIFEST_NAME, "manifest violates the contract: %s" % exc,
                              expected=str(declared), actual=computed)

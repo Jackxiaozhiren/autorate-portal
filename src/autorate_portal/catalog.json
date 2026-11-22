@@ -1,8 +1,8 @@
 {
   "en": {
     "app.title": "autorate portal",
-    "state.certified": "certified",
-    "state.refusal": "refusal",
+    "state.certified": "statistically feasible",
+    "state.refusal": "not statistically feasible",
     "state.unavailable": "unavailable",
     "verdict.bounded_supports": "bounded_supports",
     "verdict.bounded_refutes": "bounded_refutes",
@@ -41,6 +41,11 @@
     "label.provenance": "provenance",
     "label.comparability": "comparability statement (quoted verbatim)",
     "label.load": "Load certificates",
+    "label.certificates": "Certificates",
+    "text.claim_intro": "A claim is checked against this project's certificates. Three answers are possible, and cannot be bounded is a result, not a failure.",
+    "label.refresh": "Refresh",
+    "label.signin": "Sign in",
+    "label.signout": "Sign out",
     "label.clear": "Clear",
     "label.token": "API token",
     "label.check_claim": "Check a claim",
@@ -99,12 +104,14 @@
     "text.slice_source": "source artefact: {path} (backend: {backend})",
     "text.slice_source_unnamed": "(unnamed artefact)",
     "text.slice_backend_mismatch": "these groups were published by backend {source}, not by this certificate's backend {viewed}; their denominators are that artefact's, not this certificate's",
-    "msg.stale_drift": "a monitor reported drift on this policy's packet"
+    "msg.stale_drift": "a monitor reported drift on this policy's packet",
+    "error.claim_incomplete": "a claim needs share, field, unit and population; missing: {missing}",
+    "punct.list_separator": ", "
   },
   "zh-Hans": {
     "app.title": "autorate portal",
-    "state.certified": "已认证",
-    "state.refusal": "拒绝",
+    "state.certified": "统计可行",
+    "state.refusal": "统计不可行",
     "state.unavailable": "不可用",
     "verdict.bounded_supports": "bounded_supports",
     "verdict.bounded_refutes": "bounded_refutes",
@@ -143,6 +150,11 @@
     "label.provenance": "溯源",
     "label.comparability": "可比性陈述（逐字引用）",
     "label.load": "加载证书",
+    "label.certificates": "证书",
+    "text.claim_intro": "对外声明会与本项目的证书核对。答案只有三种；“无法给出上界”是结论，不是故障。",
+    "label.refresh": "刷新",
+    "label.signin": "登录",
+    "label.signout": "退出",
     "label.clear": "清除",
     "label.token": "API 令牌",
     "label.check_claim": "核查声明",
@@ -201,6 +213,8 @@
     "text.slice_source": "来源文件：{path}（后端：{backend}）",
     "text.slice_source_unnamed": "（未命名的文件）",
     "text.slice_backend_mismatch": "这些分组由后端 {source} 发布，并非本证书的后端 {viewed}；其分母属于该文件，不属于本证书",
-    "msg.stale_drift": "监测发现该策略所依据的数据包出现漂移"
+    "msg.stale_drift": "监测发现该策略所依据的数据包出现漂移",
+    "error.claim_incomplete": "声明需要份额、字段、单位和总体；缺少：{missing}",
+    "punct.list_separator": "、"
   }
 }

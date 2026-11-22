@@ -46,4 +46,4 @@ def test_a_missing_key_or_locale_raises_instead_of_falling_back():
 def test_render_states_differ_in_text_not_only_in_hue():
     for state in ("certified", "refusal", "unavailable"):
         assert i18n.state_word("en", state) != i18n.state_word("zh-Hans", state)
-    assert "拒绝" in i18n.state_word("zh-Hans", "refusal")
+    assert "不可行" in i18n.state_word("zh-Hans", "refusal")

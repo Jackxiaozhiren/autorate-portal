@@ -34,7 +34,7 @@ DB_URL_ENV = "AUTHORATE_DB_URL"
 DEFAULT_DB_FILE = "autorate-portal.db"
 
 ROLES = ("viewer", "producer", "compliance", "admin", "auditor")
-ARTIFACT_KINDS = ("certificate", "document", "records", "protocol", "transcript")
+ARTIFACT_KINDS = ("certificate", "document", "records", "protocol", "transcript", "wheel")
 POLICY_STATES = ("active", "stale", "superseded")
 EXPORT_KINDS = ("annex_iv", "iso_42001", "aap")
 

@@ -1,10 +1,13 @@
 """Stranger-verifiable replay (AC9, AC10, I6).
 
-A packet, network access to PyPI and Docker are the three things a stranger is
-allowed to have. The pinned wheel is fetched from PyPI and its bytes are checked
-against ``distribution.sha256`` *before* anything runs; a swapped hash is a
-named refusal, never a pass. With no Docker or no network the result is a named
-``not-run`` state with a non-zero exit code (AC10), never a certified result.
+A packet, Docker and - for a schema 1 packet - network access to PyPI are the
+things a stranger is allowed to have. The pinned wheel is fetched from PyPI and
+its bytes are checked against ``distribution.sha256`` *before* anything runs; a
+swapped hash is a named refusal, never a pass. A schema 2 packet carries its
+wheel set, so the index is not consulted and a host without egress can replay;
+with no Docker, or with a schema 1 packet on a host without network, the result
+is a named ``not-run`` state with a non-zero exit code (AC10), never a certified
+result.
 """
 from __future__ import annotations
 
@@ -19,6 +22,9 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+from packaging.tags import sys_tags
+from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 
 from . import EXIT_NOT_RUN, EXIT_OK, EXIT_REFUSED
 from .packet import Refusal, Verification, read_bundle, verify_bundle
@@ -35,10 +41,56 @@ REPLAY_PY = "from autorate.cli import main\nraise SystemExit(main(%r))\n" % (INN
 CONTAINER_SH = """#!/bin/sh
 set -e
 cp -a /packet /work
-python -m pip install --no-cache-dir --target /work/lib /replay/{wheel}
+if ! python -m pip install --no-cache-dir --target /work/lib /replay/wheelhouse/{wheel}; then
+  echo INSTALL_FAILED
+  exit 97
+fi
 cd /work
 AUTORATE_FEISHU_ROOT=/nonexistent PYTHONPATH=/work/lib python /replay/run_verify.py
 """
+# An embedded packet must not reach the index at all: pip is told there is none
+# and where the local wheels are. The pinned wheel is still the one installed;
+# the rest of the directory is the dependency closure the builder supplied.
+CONTAINER_SH_OFFLINE = """#!/bin/sh
+set -e
+cp -a /packet /work
+if ! python -m pip install --no-cache-dir --no-index --find-links /replay/wheelhouse --target /work/lib {wheel}; then
+  echo INSTALL_FAILED
+  exit 97
+fi
+cd /work
+AUTORATE_FEISHU_ROOT=/nonexistent PYTHONPATH=/work/lib python /replay/run_verify.py
+"""
+
+
+class InstallFailed(Exception):
+    """The replay's install step failed; the wheel set may not fit this target."""
+
+    def __init__(self, command: list[str], output: str):
+        super().__init__("install step failed: %s" % (output.strip().splitlines()[-1:] or ""))
+        self.command = command
+        self.output = output
+
+
+def incompatible_wheels(wheels: dict[str, bytes]) -> list[tuple[str, str]]:
+    """Wheels whose tags this interpreter cannot install, with their platforms.
+
+    Called before anything is installed on the uv backend: the interpreter that
+    will run `pip` is the one asking, so `sys_tags()` is the right oracle. The
+    container backend asks a different interpreter and relies on the install
+    step's own failure, which is now named rather than reported as `exited 1`.
+    """
+    supported = set(sys_tags())
+    stuck: list[tuple[str, str]] = []
+    for name in sorted(wheels):
+        try:
+            _, _, _, tags = parse_wheel_filename(name)
+        except InvalidWheelFilename:
+            stuck.append((name, "unparseable wheel filename"))
+            continue
+        if not (tags & supported):
+            stuck.append((name, ", ".join(sorted({tag.platform for tag in tags}))))
+    return stuck
 
 
 @dataclass
@@ -67,6 +119,7 @@ class ReplayOutcome:
     summary_line: str = ""
     expected: str = ""
     disagrees: bool = False
+    channel: str = ""  # online | offline; empty only when no manifest was read
     refusals: list[Refusal] = field(default_factory=list)
 
     def run_row(self) -> dict[str, Any]:
@@ -80,7 +133,8 @@ class ReplayOutcome:
         return {"argv": self.argv, "command": self.command, "exit_code": self.exit_code,
                 "stdout_sha256": self.stdout_sha256, "digest_then": self.digest_then,
                 "packet_id_in": self.packet_id_in, "state": self.state,
-                "disagrees": self.disagrees, "summary_line": self.summary_line}
+                "disagrees": self.disagrees, "summary_line": self.summary_line,
+                "channel": self.channel or "unknown"}
 
 
 def summary_line(stdout: str) -> str:
@@ -185,35 +239,43 @@ def _container_argv(env: Environment, work: Path, replay_dir: Path,
 
 
 def _run_container(env: Environment, work: Path, replay_dir: Path,
-                   verification: Verification, wheel: bytes,
+                   verification: Verification, wheels: dict[str, bytes], offline: bool,
                    runner: Callable[..., subprocess.CompletedProcess]) -> tuple[list[str], str, int]:
     manifest = verification.manifest
     wheel_filename = manifest.distribution.wheel
-    (replay_dir / wheel_filename).write_bytes(wheel)
+    wheelhouse = replay_dir / "wheelhouse"
+    wheelhouse.mkdir()
+    for name, data in wheels.items():
+        (wheelhouse / name).write_bytes(data)
     (replay_dir / "run_verify.py").write_text(REPLAY_PY, encoding="utf-8")
-    (replay_dir / "replay.sh").write_text(CONTAINER_SH.format(wheel=wheel_filename), encoding="utf-8")
+    template = CONTAINER_SH_OFFLINE if offline else CONTAINER_SH
+    (replay_dir / "replay.sh").write_text(template.format(wheel=wheel_filename), encoding="utf-8")
     argv = _container_argv(env, work, replay_dir, wheel_filename)
     proc = runner(argv)
     return argv, proc.stdout or "", proc.returncode
 
 
-def _run_uv(work: Path, wheel: bytes, wheel_filename: str,
+def _run_uv(work: Path, wheels: dict[str, bytes], wheel_filename: str, offline: bool,
             runner: Callable[..., subprocess.CompletedProcess]) -> tuple[list[str], str, int]:
     """CLI-only path (section 4.2): an isolated uv environment, not the host site-packages."""
     evidence = work / "evidence"
     venv = work / "venv"
-    wheel_path = work / wheel_filename
-    wheel_path.write_bytes(wheel)
+    wheelhouse = work / "wheelhouse"
+    wheelhouse.mkdir()
+    for name, data in wheels.items():
+        (wheelhouse / name).write_bytes(data)
+    wheel_path = wheelhouse / wheel_filename
     script = work / "run_verify.py"
     script.write_text(REPLAY_PY, encoding="utf-8")
     python = str(venv / "bin" / "python")
-    setup = [["uv", "venv", str(venv)],
-             ["uv", "pip", "install", "--python", python, "--target", str(evidence / "lib"),
-              str(wheel_path)]]
+    install = ["uv", "pip", "install", "--python", python, "--target", str(evidence / "lib")]
+    if offline:
+        install += ["--no-index", "--find-links", str(wheelhouse)]
+    setup = [["uv", "venv", str(venv)], install + [str(wheel_path)]]
     for command in setup:
         proc = runner(command)
         if proc.returncode != 0:
-            return command, proc.stdout or "", proc.returncode
+            raise InstallFailed(command, proc.stdout or "")
     argv = [python, str(script)]
     child_env = {**os.environ, "PYTHONPATH": str(evidence / "lib"),
                  "AUTORATE_FEISHU_ROOT": "/nonexistent"}
@@ -229,16 +291,25 @@ def verify_packet(packet_path: Path, env: Environment,
                              "packet integrity check failed; nothing was replayed",
                              refusals=verification.refusals)
     manifest = verification.manifest
+    # The channel is a property of the packet, not of the host: a schema 2
+    # packet replays offline even on a machine that happens to have egress, and
+    # a schema 1 packet stays online even on one that does not. A `not-run`
+    # therefore still names the channel it would have used.
+    channel = "offline" if manifest.embeds_wheel else "online"
     base = {"digest_then": manifest.protocol_digest, "packet_id_in": manifest.packet_id,
-            "expected": manifest.expected_rederived}
+            "expected": manifest.expected_rederived, "channel": channel}
 
     if manifest.records_excluded:
         return ReplayOutcome("not-run", EXIT_NOT_RUN,
                              "shareable packet excludes records artefacts; replay needs the full "
                              "org-private packet (PRD section 8.4)", **base)
 
-    required = {"container": env.docker_available and env.network_available,
-                "uv": env.network_available}
+    # A packet that carries its wheel set needs no index. The distinction is the
+    # whole point of schema 2: without it, an air-gapped host can only report
+    # not-run, which is honest but useless to the auditor who brought the packet.
+    offline = manifest.embeds_wheel
+    required = {"container": env.docker_available and (offline or env.network_available),
+                "uv": offline or env.network_available}
     if backend not in required:
         return ReplayOutcome("refused", EXIT_REFUSED,
                              "unknown replay backend %r" % backend, **base)
@@ -246,17 +317,28 @@ def verify_packet(packet_path: Path, env: Environment,
         reasons = []
         if backend == "container" and not env.docker_available:
             reasons.append(env.docker_detail)
-        if not env.network_available:
+        if not offline and not env.network_available:
             reasons.append(env.network_detail)
         return ReplayOutcome("not-run", EXIT_NOT_RUN,
                              "replay prerequisites absent: %s" % "; ".join(reasons), **base)
 
-    getter = env.wheel_fetcher or fetch_wheel
-    try:
-        wheel = getter(manifest.distribution.wheel)
-    except Exception as exc:  # noqa: BLE001 - a named not-run, never a pass
-        return ReplayOutcome("not-run", EXIT_NOT_RUN,
-                             "pinned wheel could not be fetched: %s" % exc, **base)
+    if offline:
+        wheels = {artifact.path.rsplit("/", 1)[-1]: verification.files[artifact.path]
+                  for artifact in manifest.artifacts if artifact.kind == "wheel"}
+        if manifest.distribution.wheel not in wheels:
+            return ReplayOutcome(
+                "refused", EXIT_REFUSED,
+                "the packet declares an embedded wheel set but does not carry the pinned wheel %s"
+                % manifest.distribution.wheel, **base)
+        wheel = wheels[manifest.distribution.wheel]
+    else:
+        getter = env.wheel_fetcher or fetch_wheel
+        try:
+            wheel = getter(manifest.distribution.wheel)
+        except Exception as exc:  # noqa: BLE001 - a named not-run, never a pass
+            return ReplayOutcome("not-run", EXIT_NOT_RUN,
+                                 "pinned wheel could not be fetched: %s" % exc, **base)
+        wheels = {manifest.distribution.wheel: wheel}
     actual = hashlib.sha256(wheel).hexdigest()
     if actual != manifest.distribution.sha256:
         return ReplayOutcome(
@@ -266,6 +348,19 @@ def verify_packet(packet_path: Path, env: Environment,
                               "pinned wheel sha256 mismatch",
                               expected=manifest.distribution.sha256, actual=actual)],
             **base)
+
+    if offline and backend == "uv":
+        stuck = incompatible_wheels(wheels)
+        if stuck:
+            declared = ", ".join(getattr(manifest, "wheel_platforms", []))
+            return ReplayOutcome(
+                "refused", EXIT_REFUSED,
+                "embedded wheel(s) do not install on this interpreter: %s; the packet declares %s"
+                % ("; ".join("%s [%s]" % (name, platforms) for name, platforms in stuck), declared),
+                refusals=[Refusal(name, "wheel platform does not match this interpreter",
+                                  expected=declared, actual=platforms)
+                          for name, platforms in stuck],
+                **base)
 
     runner = env.runner or (lambda argv, **kw: subprocess.run(
         argv, capture_output=True, text=True, timeout=900, **kw))
@@ -279,9 +374,10 @@ def verify_packet(packet_path: Path, env: Environment,
         try:
             if backend == "container":
                 argv, stdout, exit_code = _run_container(env, work, replay_dir, verification,
-                                                         wheel, runner)
+                                                         wheels, offline, runner)
             else:
-                argv, stdout, exit_code = _run_uv(work, wheel, manifest.distribution.wheel, runner)
+                argv, stdout, exit_code = _run_uv(work, wheels, manifest.distribution.wheel,
+                                                  offline, runner)
         except subprocess.TimeoutExpired as exc:
             # F6 exception (b): a replay that exceeded its budget did not observe
             # anything. The partial stdout is hashed so the record says what the
@@ -294,6 +390,13 @@ def verify_packet(packet_path: Path, env: Environment,
                                  stdout_sha256=hashlib.sha256(
                                      partial.encode("utf-8", "replace")).hexdigest(),
                                  **base)
+        except InstallFailed as exc:
+            declared = ", ".join(getattr(manifest, "wheel_platforms", []))
+            tail = exc.output.strip().splitlines()[-1] if exc.output.strip() else "no output"
+            return ReplayOutcome(
+                "refused", EXIT_REFUSED,
+                "the replay's install step failed: %s; the packet declares %s"
+                % (tail, declared or "no platforms"), **base)
         except OSError as exc:
             return ReplayOutcome("not-run", EXIT_NOT_RUN,
                                  "replay runner failed: %s" % exc, **base)
@@ -301,6 +404,12 @@ def verify_packet(packet_path: Path, env: Environment,
     stdout_hash = hashlib.sha256(stdout.encode("utf-8", "replace")).hexdigest()
     ran = {"argv": argv, "command": list(INNER_COMMAND), "exit_code": exit_code,
            "stdout_sha256": stdout_hash, "summary_line": summary_line(stdout)}
+    if exit_code == 97 or "INSTALL_FAILED" in stdout:
+        declared = ", ".join(getattr(manifest, "wheel_platforms", []))
+        return ReplayOutcome(
+            "refused", EXIT_REFUSED,
+            "the replay's install step failed inside %s; the packet declares %s"
+            % (env.image, declared or "no platforms"), **ran, **base)
     if exit_code != 0:
         return ReplayOutcome("refused", EXIT_REFUSED,
                              "replay exited %d; a failed replay is not a pass" % exit_code,

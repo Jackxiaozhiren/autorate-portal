@@ -29,6 +29,8 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9rem
 .triple{color:#57606a;font-size:.85rem;margin-top:.5rem}
 .meta{color:#57606a;font-size:.85rem}
 table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #d8dee4;padding:.4rem;text-align:left}
+@media print{@page{size:A4;margin:18mm}body{margin:0;max-width:none;font-size:11pt}
+.card,.refusal,.unavailable,table{break-inside:avoid}a{color:#000;text-decoration:none}}
 """
 
 

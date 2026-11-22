@@ -76,7 +76,23 @@ F1_COMMAND = ("autorate-portal packet build --source <checkout> --out packet.tar
 
 
 class ClaimError(ValueError):
-    """The claim is not a well-formed structured claim."""
+    """The claim is not a well-formed structured claim.
+
+    The missing field names are kept as data, not only baked into the English
+    message: the HTTP surface answers in the caller's locale, and a screen that
+    is Chinese everywhere else must not hand back an English validation error.
+    ``str(exc)`` stays English so the CLI and token API keep their wording.
+    """
+
+    def __init__(self, message: str, missing: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.missing = missing
+
+    def localized(self, locale: str) -> str:
+        """The same refusal, in the catalog's language for ``locale``."""
+        separator = i18n.t(locale, "punct.list_separator")
+        names = separator.join(i18n.t(locale, "label." + name) for name in self.missing)
+        return i18n.t(locale, "error.claim_incomplete", missing=names)
 
 
 @dataclass(frozen=True)
@@ -88,11 +104,11 @@ class Claim:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Claim":
-        missing = [name for name in ("share", "field", "unit", "population")
-                   if not str(raw.get(name, "")).strip()]
+        missing = tuple(name for name in ("share", "field", "unit", "population")
+                        if not str(raw.get(name, "")).strip())
         if missing:
             raise ClaimError("a claim needs share, field, unit and population; missing: %s"
-                             % ", ".join(missing))
+                             % ", ".join(missing), missing=missing)
         return cls(share=str(raw["share"]).strip(), field=str(raw["field"]).strip(),
                    unit=str(raw["unit"]).strip(), population=str(raw["population"]).strip())
 
