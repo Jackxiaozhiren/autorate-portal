@@ -73,6 +73,12 @@ The hash covers the **canonical payload**, not the file's bytes: reformatting th
 it, changing a value does. A run store containing a `mismatch` row for the packet blocks the build
 before any line is assembled, naming the run; a later `certified` row supersedes it.
 
+The page saves the response as `kind-<first 12 hex>.json` — the bytes the server sent, not a
+re-serialisation of them, so the file a reader files away is the one the portal hashed. Because the
+hash is over the canonical payload, `shasum` on the file will not match it; `export recheck` is what
+confirms a download. The page prints the full hash beside the link and puts its first twelve
+characters in the file name, so a filed bundle can be matched to the export that produced it.
+
 ## Vocabulary
 
 Four states used to share the word `certified`, and a reader could not tell which one a screen

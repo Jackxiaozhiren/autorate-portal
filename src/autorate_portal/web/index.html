@@ -30,6 +30,9 @@
   .banner { border-left: 4px solid #c0392b; padding: 6px 10px; background: #c0392b1a; }
   .slices { display: grid; gap: 12px; }
   .error { color: #c0392b; }
+  a.download { display: inline-block; padding: 7px 12px; border: 1px solid var(--line);
+    border-radius: 3px; color: inherit; text-decoration: none; }
+  a.download:hover { background: #8881; }
   .boundary { border-top: 2px dashed #c0392b; padding: 6px 0; font-size: 13px; }
   :focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
   pre { overflow-x: auto; font-size: 12px; }
@@ -41,7 +44,7 @@
     :root { color-scheme: light; }
     html, body { background: #fff; color: #000; }
     body { max-width: none; margin: 0; padding: 0; font-size: 11pt; }
-    .row, button, select, input, #error { display: none; }
+    .row, button, select, input, #error, a.download { display: none; }
     .panel, .card, table { break-inside: avoid; }
     .banner { border-left-color: #000; }
     .muted, .triple { color: #444; }
@@ -97,7 +100,7 @@
 <section id="detail" aria-live="polite"></section>
 
 <div class="row">
-  <button id="badge">shareable badge</button>
+  <button id="badge" data-i18n="label.badge">shareable badge</button>
   <button id="trend" data-i18n="label.trend">trend</button>
   <label><span data-i18n="label.export">export</span>
     <select id="export-kind">
@@ -115,7 +118,7 @@
 // numeric markup from data it has not received rendered. It formats nothing
 // numeric. All display strings come from the server's single message catalog;
 // there is no second, drifting copy of the translations here.
-const state = { token: "", signedIn: false, csrf: "", rows: [], locale: "en", messages: {}, who: null };
+const state = { token: "", signedIn: false, csrf: "", rows: [], locale: "en", messages: {}, who: null, exportUrl: null, exported: null };
 const el = (id) => document.getElementById(id);
 
 function msg(key, fallback) { return state.messages[key] || fallback; }
@@ -140,8 +143,10 @@ function applyMessages() {
   });
   // The identity line is built from a template with two values, so it cannot
   // carry data-i18n; a language switch has to rebuild it or it stays in the
-  // language it was rendered in.
+  // language it was rendered in. The export line is the same shape of problem:
+  // it is written once, when the bundle arrives.
   if (state.signedIn && state.who) { showWho(state.who); }
+  if (state.exported) { renderExport(); }
 }
 
 async function loadMessages() {
@@ -159,8 +164,17 @@ async function call(path, options = {}) {
   const response = await fetch(withLocale(path), Object.assign({}, options, { headers }));
   if (!response.ok) {
     let detail = response.status + " " + response.statusText;
-    try { const body = await response.json(); detail = body.detail || detail; } catch (ignored) {}
-    throw new Error(detail);
+    let body = null;
+    try {
+      body = await response.json();
+      // A blocked export carries its refusal as data (`block_reason`), not as a
+      // `detail` sentence; without this the reader saw only "409 Conflict".
+      detail = body.detail || body.block_reason || detail;
+    } catch (ignored) {}
+    const error = new Error(detail);
+    error.status = response.status;
+    error.body = body;
+    throw error;
   }
   return response;
 }
@@ -307,13 +321,60 @@ async function showTrend() {
 }
 
 async function buildExport() {
+  const kind = el("export-kind").value;
+  say("");
+  note("");
   try {
-    const kind = el("export-kind").value;
     const response = await call("/api/v1/exports/" + encodeURIComponent(kind), { method: "POST" });
-    const body = await response.json();
-    el("tools").innerHTML = '<pre></pre>';
-    el("tools").querySelector("pre").textContent = JSON.stringify(body, null, 2);
+    // Save the bytes exactly as they arrived. The bundle is a document a
+    // stranger re-checks with `export recheck`, so the page must not be a second
+    // writer of it; re-serialising here would put two encodings of one bundle
+    // into the world and only one of them would be the one the hash names.
+    const blob = await response.blob();
+    const digest = response.headers.get("x-bundle-sha256") || "";
+    const name = kind + "-" + (digest ? digest.slice(0, 12) : "unverified") + ".json";
+    state.exported = { blob, digest, name, size: blob.size, text: await blob.text() };
+    renderExport();
+    const link = el("tools").querySelector("a.download");
+    if (link) { link.click(); }
   } catch (error) { say(error.message); }
+}
+
+// Kept separate from buildExport because a language switch re-runs it: the line
+// and the two labels are built from the catalog at render time, so they have to
+// be rebuilt rather than left in the language the bundle arrived in.
+function renderExport() {
+  const saved = state.exported;
+  if (!saved) { return; }
+  const blob = saved.blob;
+  const name = saved.name;
+  if (state.exportUrl) { URL.revokeObjectURL(state.exportUrl); }
+  state.exportUrl = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = state.exportUrl;
+  link.download = name;
+  link.className = "download";
+  link.textContent = msg("label.download_export", "save the bundle");
+
+  const line = document.createElement("p");
+  line.className = "muted triple";
+  const template = msg("text.export_file", "{name} · {bytes} bytes · sha256 {digest}");
+  line.textContent = template
+    .replace("{name}", () => name)
+    .replace("{bytes}", () => String(saved.size))
+    .replace("{digest}", () => saved.digest || msg("text.unavailable", "unavailable"));
+
+  // The old behaviour printed the whole document on the page. Keep that
+  // readable, but collapsed: the file is the deliverable, not the screen.
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = msg("label.preview", "preview");
+  const pre = document.createElement("pre");
+  pre.textContent = saved.text;
+  details.append(summary, pre);
+
+  el("tools").replaceChildren(line, link, details);
 }
 
 el("locale").addEventListener("change", async (event) => {
@@ -335,6 +396,8 @@ el("clear").addEventListener("click", () => {
   el("detail").replaceChildren();
   el("verdict").replaceChildren();
   el("tools").replaceChildren();
+  if (state.exportUrl) { URL.revokeObjectURL(state.exportUrl); state.exportUrl = null; }
+  state.exported = null;
   el("certificates").hidden = true;
   hideWho();
   note("");
