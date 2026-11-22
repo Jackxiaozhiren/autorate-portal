@@ -128,11 +128,43 @@ files were restored with `git checkout`. The test distinguishes the dialects rat
 whatever they happen to emit.
 
 Offline rendering is not execution. It proves these are the statements this build would send and
-that they describe the intended end state; it does not prove a server accepts them. That remains
-P1-P20, run by hand on one node.
+that they describe the intended end state; it does not prove a server accepts them. That gap is
+closed by the `postgres` job in the next section; P1-P20 remain the container-and-probe evidence
+from this machine.
 
-Suite after this change: **411 passed, 1 warning**; `ruff` clean on the CI rule set
-(`E9,F63,F7,F82,F401,F811`).
+Suite in the SQLite job: **411 passed, 7 skipped** (the PostgreSQL file skips when
+`AUTHORATE_TEST_PG_URL` is unset); `ruff` clean on the CI rule set (`E9,F63,F7,F82,F401,F811`).
+
+## The postgres job (added 19:45-20:10)
+
+Rendering can only say the statements are right. A second replica waiting on `pg_advisory_lock`,
+`/readyz` against a server that was never migrated, and a downgrade all need a server, so those
+tests skipped by design and the suite never executed the PostgreSQL path. The new `postgres` job
+supplies one: a `postgres:17` service container, `uv sync --extra postgres`, and three test files —
+**26 passed, 0 skipped, 3.9 s** locally against the same image tag.
+
+| Test | Claim it makes |
+|---|---|
+| chain accepted, constraint widened | the server executes 0001-0005 and `ck_artifact_kind` contains `wheel` |
+| four replicas started together | all four exit with the head revision; exactly one `alembic_version` row |
+| a held lock | `MigrationLockTimeout` after ~0.5 s, and `alembic_version` was never created |
+| the lock is released | `pg_try_advisory_lock` succeeds after an upgrade |
+| downgrade then upgrade | the reverse direction is accepted and the old constraint returns |
+| readiness, unmigrated then migrated | 503 `schema-missing`, then 200 with the head revision |
+| readiness, schema behind | 503 `schema-behind`, naming `0004` and `0005` |
+
+The tests can fail. Removing the lock from `_postgres_lock` turns the held-lock test red in 0.7 s.
+The four-replica test does not fail politely under the same mutation: it hangs on PostgreSQL's DDL
+lock, which is the original defect seen from the other side. The first mutation run was killed at
+the tool's limit for that reason, and the check was repeated with the single test.
+
+The job also refuses to pass on a skip: it tees the summary and exits 1 when `N skipped` appears,
+because a missing service or driver would otherwise leave a green job that tested nothing. Verified
+locally — with the variable unset the same command reports `7 skipped` and the guard fires.
+
+What this still does not prove: one container, no failover, no TLS and no managed cluster; an empty
+single-tenant schema; and no orchestrator acting on `/readyz`. It executes the contract, it does not
+schedule it.
 
 ## One reading worth writing down
 

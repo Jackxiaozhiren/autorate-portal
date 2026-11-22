@@ -73,6 +73,50 @@ jobs:
           "
           python -c "import tomllib,pathlib; tomllib.loads(pathlib.Path('pyproject.toml').read_text()); print('pyproject ok')"
 
+  postgres:
+    name: postgres 17 / migrations and readiness
+    runs-on: ubuntu-latest
+    needs: suite
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: portal
+          POSTGRES_PASSWORD: portal
+          POSTGRES_DB: portal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U portal -d portal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AUTHORATE_TEST_PG_URL: postgresql+psycopg://portal:portal@127.0.0.1:5432/portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - name: Install (frozen, with the postgres driver)
+        run: uv sync --frozen --extra dev --extra postgres
+      - name: Migrations and probes on a server, not a rendering
+        run: |
+          # Offline rendering (the suite job) proves the statements; only a server accepts them.
+          # `-o addopts=` keeps the summary line, which `-qq` would suppress, so the guard below
+          # can read it.
+          set -euo pipefail
+          log="$RUNNER_TEMP/postgres.txt"
+          uv run --frozen --extra dev --extra postgres pytest -o addopts= -q -rs \
+            tests/test_migrate_postgres.py tests/test_migrate.py tests/test_readiness.py \
+            | tee "$log"
+          if grep -qE '[0-9]+ skipped' "$log"; then
+            echo "::error::a PostgreSQL test skipped; the service or the driver is missing"
+            exit 1
+          fi
+          grep -qE '[0-9]+ passed' "$log"
+
   packet:
     name: frozen packet / AC1 / AC9 / AC10 / I6
     runs-on: ubuntu-latest
