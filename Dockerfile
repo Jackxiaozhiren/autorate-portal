@@ -1,6 +1,10 @@
 # One image, one process. No credential is baked in: the service refuses to start
 # without AUTHORATE_TOKEN_SALT and AUTHORATE_SECRET_KEY (see create_app), and no
 # layer here sets, copies or defaults either. Pass them at run time.
+#
+# State lives on the volume: the database defaults to SQLite under /data, which is
+# the only path the unprivileged user can write, and AUTHORATE_DB_URL overrides it
+# (the postgres extra is installed, so a postgresql:// URL works unchanged).
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -12,7 +16,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./
-RUN python -m pip install --no-cache-dir .
+RUN python -m pip install --no-cache-dir ".[postgres]"
 
 RUN useradd --create-home --uid 10001 portal \
     && mkdir -p /data/packets \
@@ -20,6 +24,7 @@ RUN useradd --create-home --uid 10001 portal \
 USER portal
 
 ENV AUTHORATE_PACKET_STORE=/data/packets
+ENV AUTHORATE_DB_URL=sqlite:////data/portal.db
 VOLUME ["/data"]
 EXPOSE 8000
 
