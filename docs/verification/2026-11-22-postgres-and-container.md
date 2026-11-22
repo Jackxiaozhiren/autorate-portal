@@ -100,6 +100,40 @@ actually appears.
 `tests/test_dockerfile.py` pins all four claims (the extra, the volume path, no credential in a
 layer, unprivileged user and healthcheck). Full suite after the fix: **382 passed, 1 warning**.
 
+## What the suite could not see (added 19:05-19:20)
+
+Every migration test in this repository runs on SQLite. P9-P20 therefore proved the PostgreSQL
+chain once, by hand, and nothing would have noticed if a later migration stopped compiling for
+PostgreSQL — the suite has no server to compile it against.
+
+The dialects do not differ only in syntax. `0005` changes a CHECK constraint: PostgreSQL drops and
+re-adds it in place, SQLite has to build `_alembic_tmp_artifact`, copy the rows, drop the original
+and rename. A migration that is green on SQLite can still fail on the first container boot.
+
+`tests/test_migrate_offline.py` renders the whole chain for both dialects without connecting
+(Alembic offline mode) and asserts:
+
+- every revision is stamped, in chain order, ending at `0005_artifact_wheel_kind`;
+- PostgreSQL emits `ALTER TABLE artifact DROP CONSTRAINT ck_artifact_kind` and
+  `ADD CONSTRAINT`, and no `_alembic_tmp_artifact`;
+- SQLite emits the rebuild and no `DROP CONSTRAINT`;
+- both renderings carry the same six-kind CHECK;
+- rendering a SQLite URL creates no file, and the PostgreSQL URL points at TEST-NET-1
+  (`192.0.2.1`), so an accidental connection would fail instead of passing silently.
+
+The assertions are not decorative. Replacing `batch_alter_table` in `0005` with a plain
+`op.drop_constraint` turned four SQLite assertions red (alembic raises `NotImplementedError: No
+support for ALTER of constraints in SQLite dialect`) while the PostgreSQL ones stayed green; the
+files were restored with `git checkout`. The test distinguishes the dialects rather than accepting
+whatever they happen to emit.
+
+Offline rendering is not execution. It proves these are the statements this build would send and
+that they describe the intended end state; it does not prove a server accepts them. That remains
+P1-P20, run by hand on one node.
+
+Suite after this change: **411 passed, 1 warning**; `ruff` clean on the CI rule set
+(`E9,F63,F7,F82,F401,F811`).
+
 ## One reading worth writing down
 
 `IngestResult.packet_id` is the manifest's packet identity and is the same in every project;
