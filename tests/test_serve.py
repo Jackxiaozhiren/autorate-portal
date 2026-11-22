@@ -60,7 +60,9 @@ def test_the_image_copies_no_environment_file_and_migrates_before_serving():
     assert ".env" not in text
     assert "COPY . " not in text and "COPY .\n" not in text
     assert SALT_ENV + "=" not in text and SECRET_ENV + "=" not in text
-    assert text.index("alembic upgrade head") < text.index("autorate-portal serve")
+    # The migration step must be the locked command, not bare `alembic`: replicas start
+    # together, and an unlocked upgrade is the race described in autorate_portal.migrate.
+    assert text.index("autorate-portal migrate --if-enabled") < text.index("autorate-portal serve")
     assert "exec autorate-portal serve" in text
 
 

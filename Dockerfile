@@ -31,6 +31,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
 
-# Migrations run before the server accepts a connection, and `exec` replaces the
-# shell so the process the runtime supervises is the server, not `sh`.
-CMD ["sh", "-c", "alembic upgrade head && exec autorate-portal serve --host 0.0.0.0 --port 8000"]
+# Migrations run before the server accepts a connection, under a schema lock: several
+# replicas starting together serialise here instead of applying the same DDL twice (see
+# autorate_portal.migrate). `exec` replaces the shell so the process the runtime supervises
+# is the server, not `sh`.
+#
+# A deployment that migrates in its own job sets AUTHORATE_MIGRATE_ON_START=0 on the
+# replicas and runs `autorate-portal migrate` in the job; the boot step then skips.
+CMD ["sh", "-c", "autorate-portal migrate --if-enabled && exec autorate-portal serve --host 0.0.0.0 --port 8000"]

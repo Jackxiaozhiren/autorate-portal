@@ -28,11 +28,21 @@ read this file.
 
 ## Run
 
-`autorate-portal serve` is the only command that binds a port. The image runs the migrations before
-the server (`alembic upgrade head && exec autorate-portal serve ...`), listens on 8000, stores
-packets under `/data/packets`, and runs as uid 10001. No layer carries a credential: the service
-refuses to start unless `AUTHORATE_TOKEN_SALT` and `AUTHORATE_SECRET_KEY` are supplied at run time,
-and `AUTHORATE_DB_URL` points at the database the migrations just updated.
+`autorate-portal serve` is the only command that binds a port. The image runs the migrations
+before the server (`autorate-portal migrate --if-enabled && exec autorate-portal serve ...`),
+listens on 8000, stores packets under `/data/packets`, and runs as uid 10001. No layer carries a
+credential: the service refuses to start unless `AUTHORATE_TOKEN_SALT` and
+`AUTHORATE_SECRET_KEY` are supplied at run time, and `AUTHORATE_DB_URL` points at the database
+the migrations just updated.
+
+`autorate-portal migrate` applies the chain under a schema lock — a PostgreSQL advisory lock
+keyed on `current_database()`, or a `flock` on `<database>.migrate.lock` for SQLite — so
+replicas may start together without applying the same DDL twice. It waits
+`AUTHORATE_MIGRATE_LOCK_TIMEOUT` seconds (default 120) and then refuses with exit 4 rather
+than starting against an unknown schema. A deployment that migrates in its own job sets
+`AUTHORATE_MIGRATE_ON_START=0` on the replicas and runs `autorate-portal migrate` in the job;
+`/healthz` is a liveness check and does not prove the schema exists, so the job must be
+sequenced before the replicas, not beside them.
 
 A person signs in once: `POST /api/v1/session` exchanges a project-scoped API token for an 8-hour
 signed cookie that names the project it was issued for. Writes authenticated by that cookie must

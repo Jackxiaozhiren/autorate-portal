@@ -161,8 +161,15 @@ not an extra. The image does **not** run `doctor` at startup, which is a deliber
 would make an air-gapped deployment refuse to boot — the opposite of what V1 is for. The startup
 gate is instead: credentials refused before a socket exists (T1), migrations before the server, and
 a `/healthz` healthcheck. `serve` itself does not verify the database's migration head; the image's
-`alembic upgrade head &&` is the enforcement point, and a bare `serve` on an unmigrated database is
-a deployment error the healthcheck will surface.
+migration step is the enforcement point, and a bare `serve` on an unmigrated database is a
+deployment error. **Amended 2026-11-22:** the sentence above used to name `alembic upgrade head &&`
+and to say the healthcheck would surface an unmigrated database. Both are wrong now, and the
+second was wrong when written: `/healthz` returns a constant and never touches the database, so it
+stays 200 on an empty one. The step is `autorate-portal migrate --if-enabled &&`, which takes a
+schema lock so replicas may start together (see `autorate_portal.migrate` and
+`docs/verification/2026-11-22-postgres-and-container.md` §P9-P12). Turning that step off with
+`AUTHORATE_MIGRATE_ON_START=0` is only safe when a job has already run the migration: nothing in
+the image detects the reverse order.
 
 **T5 deviation, recorded rather than hidden.** The unit is a **wheel set**, not a single wheel.
 `autorate` depends on `numpy`; embedding only the pinned wheel would still send `pip` to the index

@@ -38,3 +38,22 @@ def test_the_server_runs_unprivileged_and_declares_a_healthcheck():
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "USER portal" in text
     assert "/healthz" in text
+
+
+def test_the_boot_step_takes_the_schema_lock_before_it_serves():
+    """`alembic upgrade head` at boot is the race: two replicas apply the same DDL.
+
+    The lock lives in `autorate-portal migrate`, so the image must call that and not the
+    bare alembic command. Measured on PostgreSQL 17: three replicas starting together all
+    reach 200, and four concurrent processes leave exactly one revision (see
+    docs/verification/2026-11-22-postgres-and-container.md).
+    """
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "autorate-portal migrate --if-enabled && exec autorate-portal serve" in text
+    assert "alembic upgrade head" not in text, "the unlocked path must not come back"
+
+
+def test_the_boot_step_can_be_turned_off_for_a_migration_job():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "AUTHORATE_MIGRATE_ON_START=0" in text, (
+        "a deployment that migrates in its own job needs to be told how")

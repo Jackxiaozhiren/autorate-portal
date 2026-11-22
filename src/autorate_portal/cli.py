@@ -277,6 +277,26 @@ def cmd_serve(args) -> int:
     return EXIT_OK
 
 
+def cmd_migrate(args) -> int:
+    """Apply the chain under a schema lock, or skip it when the deployment migrated first."""
+    from . import migrate as migrate_module
+
+    if args.if_enabled and not migrate_module.migrate_on_start():
+        print("migrate: %s is off; the schema is another job's step" % migrate_module.STARTUP_ENV)
+        return EXIT_OK
+    try:
+        revision = migrate_module.upgrade_to_head(
+            args.db_url, timeout=args.lock_timeout, script_location=args.migrations)
+    except migrate_module.MigrationLockTimeout as exc:
+        print("REFUSING TO MIGRATE: %s" % exc, file=sys.stderr)
+        return EXIT_REFUSED
+    except migrate_module.MigrationConfigurationError as exc:
+        print("REFUSING TO MIGRATE: %s" % exc, file=sys.stderr)
+        return EXIT_USAGE
+    print("schema at %s" % revision)
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autorate-portal",
                                      description="M1 evidence packets for autorate")
@@ -348,6 +368,17 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--port", type=int, default=8000)
     srv.add_argument("--store", default=None, help="packet store directory")
     srv.set_defaults(fn=cmd_serve)
+
+    mig = sub.add_parser("migrate", help="apply the schema chain once, under a lock")
+    mig.add_argument("--db-url", default=None,
+                     help="database to upgrade (default: AUTHORATE_DB_URL, then the SQLite file)")
+    mig.add_argument("--timeout", dest="lock_timeout", type=float, default=None,
+                     help="seconds to wait for the schema lock before refusing")
+    mig.add_argument("--migrations", default=None,
+                     help="directory holding the chain (default: alembic.ini, then the package)")
+    mig.add_argument("--if-enabled", action="store_true",
+                     help="skip when AUTHORATE_MIGRATE_ON_START is off; for a replica's boot step")
+    mig.set_defaults(fn=cmd_migrate)
 
     exp = sub.add_parser("export", help="build or recheck an audit bundle (F5)")
     esub = exp.add_subparsers(dest="export_command", required=True)
