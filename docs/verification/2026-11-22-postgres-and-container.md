@@ -174,7 +174,7 @@ when the Dockerfile, the probe or the migration command changes, so a `container
 
 `tests/test_container_replay.py` creates a private network, starts `postgres:17`, and gives each
 test an empty `public` schema plus its own portal container with a published port. Five tests,
-**10.5 s** locally:
+**11-13 s** locally:
 
 | Reading | Assertion |
 |---|---|
@@ -190,10 +190,15 @@ at boot and answers readyz 200. The job also refuses to pass on a skip, like the
 runner without Docker cannot leave it green; a final `always()` step removes any `at-gate-`
 container and network the fixtures did not get to.
 
-One finding from writing it: Docker's published port accepts a connection **before** the container's
-server is listening and then closes it, so a health poll must treat "connection closed without a
-response" as *not answering yet*. The first run failed on exactly that, and `tools`-level polling
-that only catches `URLError` would have been flaky on a busy runner.
+Two findings from writing it. Docker's published port accepts a connection **before** the
+container's server is listening and then closes it, so a health poll must treat "connection closed
+without a response" as *not answering yet*; the first local run failed on exactly that. The second
+is worse because it is silent: the official `postgres` image answers `pg_isready` from a bootstrap
+server it then shuts down, so a wait that only asks "is it up" passes a moment too early. CI failed
+there — `ERROR at setup of` the first test, `FATAL: the database system is shutting down` — after a
+local run had passed. The fixture now counts the `ready to accept connections` banners (one per
+start, two on a fresh container) and confirms with a query. Reproduced deterministically afterwards:
+`pg_isready` 0 then `psql` **rc=2**, versus **rc=0** and two banners after the wait.
 
 What this does not prove: no scheduler acts on the answers — the probes are driven by the test, not
 by Kubernetes, Nomad or Compose — and one host, one database, no failover. It repeats the manual

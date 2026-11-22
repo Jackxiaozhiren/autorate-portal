@@ -97,16 +97,53 @@ def _db_url(cluster: Cluster) -> str:
     return "postgresql+psycopg://portal:portal@%s:5432/portal" % cluster.pg
 
 
-def _pg_ready(cluster: Cluster) -> None:
-    deadline = time.monotonic() + 60
-    while True:
-        ready = _docker("exec", cluster.pg, "pg_isready", "-U", "portal", "-d", "portal",
-                        check=False)
-        if ready.returncode == 0:
+READY_BANNER = "database system is ready to accept connections"
+
+
+def _pg_logs(cluster: Cluster) -> str:
+    done = _docker("logs", cluster.pg, check=False)
+    return (done.stdout or "") + (done.stderr or "")
+
+
+def _banners(cluster: Cluster) -> int:
+    return _pg_logs(cluster).count(READY_BANNER)
+
+
+def _psql_ok(cluster: Cluster) -> bool:
+    return _docker("exec", cluster.pg, "psql", "-U", "portal", "-d", "portal",
+                   "-tAc", "select 1", check=False).returncode == 0
+
+
+def _wait_for_ready(cluster: Cluster, minimum_banners: int) -> None:
+    """Wait for the *real* server, not the temporary one the image runs while it initialises.
+
+    The official image answers `pg_isready` from a bootstrap server that then shuts down
+    (`FATAL: the database system is shutting down`), so a check that only asks "is it up" can
+    pass a moment too early. Each start logs one `ready to accept connections` line, so the
+    count is the discriminator, and a real query confirms it.
+    """
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        if _banners(cluster) >= minimum_banners and _psql_ok(cluster):
             return
-        if time.monotonic() >= deadline:
-            raise AssertionError("postgres never became ready:\n%s" % ready.stderr)
-        time.sleep(0.5)
+        time.sleep(0.4)
+    raise AssertionError("postgres never became ready (%d banners):\n%s"
+                         % (_banners(cluster), _pg_logs(cluster)[-2000:]))
+
+
+def _start_pg(cluster: Cluster) -> None:
+    """Start a stopped container and wait for the server of this start, not the previous one."""
+    before = _banners(cluster)
+    _docker("start", cluster.pg, check=False)
+    _wait_for_ready(cluster, before + 1)
+
+
+def _ensure_pg_running(cluster: Cluster) -> None:
+    running = _docker("inspect", "-f", "{{.State.Running}}", cluster.pg).stdout.strip()
+    if running == "true":
+        _wait_for_ready(cluster, 0)
+    else:
+        _start_pg(cluster)
 
 
 def _psql(cluster: Cluster, sql: str) -> str:
@@ -127,7 +164,9 @@ def cluster():
         _docker("run", "-d", "--name", pg, "--network", network,
                 "-e", "POSTGRES_USER=portal", "-e", "POSTGRES_PASSWORD=portal",
                 "-e", "POSTGRES_DB=portal", "postgres:17")
-        _pg_ready(cluster := Cluster(image=image, network=network, pg=pg))
+        cluster = Cluster(image=image, network=network, pg=pg)
+        # The image starts a bootstrap server while it initialises, then replaces it: two banners.
+        _wait_for_ready(cluster, 2)
         yield cluster
     finally:
         _docker("rm", "-f", pg, check=False)
@@ -137,8 +176,7 @@ def cluster():
 @pytest.fixture()
 def fresh_schema(cluster):
     """An empty ``public`` schema, and a database that is running again."""
-    _docker("start", cluster.pg, check=False)
-    _pg_ready(cluster)
+    _ensure_pg_running(cluster)
     _psql(cluster, "drop schema if exists public cascade; create schema public")
     return cluster
 
@@ -226,8 +264,7 @@ def test_a_database_outage_is_unready_but_the_container_stays_alive(cluster, fre
               timeout=20, what="readiness never reported the outage")
         assert replica.get("/healthz") == (200, {"status": "ok"})
     finally:
-        _docker("start", cluster.pg)
-        _pg_ready(cluster)
+        _start_pg(cluster)
     _wait(lambda: replica.get("/readyz"), lambda status, _body: status == 200,
           timeout=30, what="the replica never recovered")
 
