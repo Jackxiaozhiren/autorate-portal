@@ -157,12 +157,17 @@ jobs:
               print('F2 %s: %d bytes' % (locale, len(text.encode('utf-8'))))
           assert pages['en'] != pages['zh-Hans']
           assert 'lang="en"' in pages['en'] and 'lang="zh-Hans"' in pages['zh-Hans']
+          state_words = {locale: i18n.state_word(locale, 'refusal')
+                         for locale in i18n.LANGUAGES}
+          assert len(set(state_words.values())) == len(state_words), state_words
           for locale, text in pages.items():
               assert 'empty_feasible_set' in text, locale
               assert '<div class="card">' not in text, 'a refusal renders as a refusal'
-          assert '拒绝' in pages['zh-Hans'] and 'refusal' in pages['en'], \
-              'the state differs in text as well as hue'
-          print('localization: one catalog, two languages, verbatim refusal reason')
+              assert state_words[locale] in text, (locale, state_words[locale])
+              foreign = [w for other, w in state_words.items() if other != locale]
+              assert all(w not in text for w in foreign), (locale, foreign)
+          print('localization: one catalog, two languages, verbatim refusal reason;',
+                'the state is text, not only hue')
           PY
 
       - name: Section 8.4 privacy audit
