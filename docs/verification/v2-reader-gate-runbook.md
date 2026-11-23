@@ -18,48 +18,47 @@
 
 两个条件是 B6 的硬要求：非作者、两人。少一个都只能继续 `not-run`。
 
-## 第 1 步 · 准备环境（约 5 分钟）
+## 第 1 步 · 准备环境（约 2 分钟）
 
-**1.1 启动服务，允许局域网访问**（`0.0.0.0` 是关键；`127.0.0.1` 读者连不上）：
-
-```bash
-cd /Users/jackson/laya/autorate-portal
-AUTHORATE_DB_URL=sqlite:////tmp/v2-walkthrough/portal.db \
-AUTHORATE_TOKEN_SALT=walkthrough-salt \
-AUTHORATE_SECRET_KEY=walkthrough-secret \
-.venv/bin/python -m autorate_portal.cli serve --host 0.0.0.0 --port 8111 \
-  --store /tmp/v2-walkthrough/store
-```
-
-**1.2 查你的内网地址**，把它告诉读者：
-
-```bash
-ipconfig getifaddr en0   # 例如 192.168.1.23
-```
-
-读者访问 `http://<你的IP>:8111/`。确认读者能打开页面（先别给 token）。
-
-**1.3 给每位读者单独签一个 token**（这样审计日志能区分谁做了什么）：
+一条命令把库、演示包和两张令牌都准备好：
 
 ```bash
 cd /Users/jackson/laya/autorate-portal
-AUTHORATE_DB_URL=sqlite:////tmp/v2-walkthrough/portal.db \
-AUTHORATE_TOKEN_SALT=walkthrough-salt .venv/bin/python - <<'PY'
-from autorate_portal import auth, db
-S = db.make_session(db.make_engine())
-with S() as s:
-    for label, uid in (("P1", "u-ada"), ("P2", "u-lin")):
-        tok, _ = auth.issue_token(s, user_id=uid, project_id="prj-laya",
-                                  salt="walkthrough-salt")
-        print(f"{label} ({uid}): {tok}")
-    s.commit()   # 必须：issue_token 只 flush，不 commit 会在上下文退出时回滚
-PY
+.venv/bin/python tools/walkthrough.py up
 ```
 
-> 注意：`issue_token` 内部只做 `flush()`，不提交。若省略 `s.commit()`，会话上下文退出时会回滚，
-> token 打印出来了却没落库，用它会得到 `401 unknown token`。本次执行已踩过并修正。
+它做四件事，然后把结果打印出来：用**测试夹具本身**构建 M4 演示包（与套件断言的是同一个文件，
+不会各自漂移）、按**迁移链**建库、摄入这个包、给 P1/P2 各签一个令牌。打印内容包括：
 
-把 P1 的 token 只给 P1，P2 的只给 P2。**不要**把你自己的 token 给他们。
+- 起服务的命令（含库路径、盐、密钥、端口、`--store`）；
+- 读者要打开的地址（自动取 `en0`/`en1` 的内网 IP，取不到则为 `127.0.0.1`）；
+- 两张令牌卡，形如 `P1 (compliance, ada@example.test): <token>`。
+
+令牌同时写进 `/tmp/v2-walkthrough/tokens.json`（权限 `0600`）。换端口或换目录用
+`--port 8123 --root /tmp/other`；库已存在时会拒绝覆盖，确认重来再加 `--reset`。
+
+**1.1 在另一个终端，按它打印的那行命令起服务。** 关键是 `--host 0.0.0.0`：绑 `127.0.0.1`
+读者连不上。若打印的地址不是读者能访问的那个（多网卡、VPN、手机热点），用 `--address` 覆盖。
+
+**1.2 别人坐下之前，先自己跑一遍预检**：
+
+```bash
+.venv/bin/python tools/walkthrough.py check
+```
+
+它**以读者身份**做同样的十件事——P1/P2 各登录一次、各读一次证书列表、各问三道题——逐行打印
+`ok` / `FAIL`。十行全 `ok` 才发题；任何一行 `FAIL` 都说明库不对，现在发现只是返工，读者坐下之后
+才发现就是白跑一趟。它连不上服务会直接说 `start the service first`，不会假装通过；缺令牌、令牌
+签错了盐、库没摄入，各有各的那一行变红（见下表）。
+
+| `check` 的某行变红 | 通常意味着 |
+|---|---|
+| `P1/P2 sign-in` | 令牌不是这个盐签的，或库不是这个库 |
+| `P1/P2 certificates` | 库里没有证据：`up` 是否报过 `refused`？摄入是否跳过？ |
+| `P1/P2 Q1-Q3` | 语料或判定逻辑变了，先别发题——跑一遍套件 |
+
+**1.3 把两张卡分别给两个人**：P1 的只给 P1，P2 的只给 P2。**不要**把你自己的令牌给他们，也不要
+让他们共用一个——审计日志要能区分谁做了什么。
 
 ## 第 2 步 · 给读者的三道题（逐字照发）
 
@@ -119,7 +118,7 @@ PDF 位置：____________________________________
 ## 第 6 步 · 收口（pass 之后才做）
 
 1. 新建 `docs/verification/2026-11-18-v2-reader-gate.md`，写入：读者代号与角色、日期、三道题的原话答案、困惑点、判定勾选表、PDF 归档位置。可用匿名代号，不必写真人姓名，但要能证明"非作者、非同屏作者代操作"。
-2. 改 `docs/superpowers/plans/2026-11-17-v2-audience.md` 第 79 行 `V2-B6` 的 verdict 由 `not-run` 改为 `pass`，Reading 列指向上面这份文档。
+2. 改 `docs/superpowers/plans/2026-11-17-v2-audience.md` 里 `V2-B6` 那一行的 verdict 由 `not-run` 改为 `pass`，Reading 列指向上面这份文档（按行号找会失效，按 `V2-B6` 找）。
 3. 改 `docs/verification/2026-11-18-v2-reader-walkthrough.md`：开头的 "B6 stays not-run"、§4 的 B6 行、§2 "To close" 段落，同步为已关闭并链接到新文档。B6′ 行保持 agent-only 不变。
 4. 若判定为不 pass：不要改任何门禁行；把困惑点写进新文档，回到 V2-D3 反转决策。
 
@@ -127,3 +126,64 @@ PDF 位置：____________________________________
 
 - 现有语料每个证书都是 `empty_feasible_set`，所以任何合式 claim 都只能得到 `cannot_be_bounded`；`bounded_supports` / `bounded_refutes` 两个 verdict **本次无法用真人验证**，需要另一个发布过认证比率的包。
 - 本次验证的是局域网上的 SQLite 部署；非 SQLite 后端、公网部署不在 B6 范围内。
+- `cannot_be_bounded` 对"这个包没测过这个字段"和"这个库里没有任何证书"是**同一个答案**。二者只能靠
+  证书行数分辨，这就是 `check` 数证书的原因。若 `certificates` 行是 `0`，先回头看 `up` 有没有报
+  `the demo packet was refused`，不要当成"项目还没有数据"。
+- `up` 用迁移链建库，所以 `/readyz` 会答 `ready` 并报出 revision。若你换了库却看到
+  `schema-missing`，那是库没经过迁移，不是服务坏了。
+- `check` 只覆盖 P1/P2 的三道题与登录路径；它不检查打印版式（A4、控件隐藏），那三项只能在读者的
+  打印预览里看，仍按第 4 步记录。
+
+## 附录 · 工具不可用时的手工版
+
+`tools/walkthrough.py` 依赖 `.venv` 与 `tests/conftest.py`（演示包用夹具本身构建，手抄一份就是第二个
+真相）。演示包这一步没有手工替代：
+
+```bash
+.venv/bin/python tools/walkthrough.py packet --out /tmp/v2-walkthrough/demo.packet.tar
+```
+
+其余步骤可以手工等价地做：
+
+```bash
+cd /Users/jackson/laya/autorate-portal
+.venv/bin/python - <<'PY'
+from pathlib import Path
+from autorate_portal import auth, db, ingest, migrate
+
+url = "sqlite:////tmp/v2-walkthrough/portal.db"
+migrate.upgrade_to_head(url)      # 不要用 create_all：那会让 /readyz 报 schema-missing
+S = db.make_session(db.make_engine(url))
+
+with S() as s:                    # 组织、项目、三个用户
+    s.add(db.Org(id="org-laya", name="org-laya"))
+    s.add(db.Project(id="prj-laya", org_id="org-laya", name="laya autorate"))
+    for uid, mail, role in (("u-ada", "ada@example.test", "compliance"),
+                            ("u-lin", "lin@example.test", "viewer"),
+                            ("u-prod", "producer@example.test", "producer")):
+        s.add(db.User(id=uid, email=mail, display=mail.split("@")[0]))
+        s.add(db.Membership(user_id=uid, org_id="org-laya", role=role))
+    s.commit()
+
+with S() as s:                    # 摄入演示包
+    r = ingest.ingest(s, bundle_path=Path("/tmp/v2-walkthrough/demo.packet.tar"),
+                      project_id="prj-laya", actor="producer@example.test",
+                      store_dir=Path("/tmp/v2-walkthrough/store"))
+    s.commit()
+    print(r.state, r.accepted)    # 必须是 accepted True
+
+with S() as s:                    # 一位读者一个令牌
+    for label, uid in (("P1", "u-ada"), ("P2", "u-lin")):
+        tok, _ = auth.issue_token(s, user_id=uid, project_id="prj-laya",
+                                  salt="walkthrough-salt")
+        print(f"{label} ({uid}): {tok}")
+    s.commit()   # 必须：issue_token 只 flush，不 commit 会在上下文退出时回滚
+PY
+```
+
+`issue_token` 只 `flush()` 不提交：省略 `s.commit()` 会回滚，令牌打印出来了却落不了库，用它得到
+`401 unknown token`。本次走查踩过并修正。
+
+手工版不会替你写令牌文件。把打印出的两个令牌按 `{"P1": "...", "P2": "..."}` 存进
+`/tmp/v2-walkthrough/tokens.json`，`check` 默认就从这里读；不存也能走完第 2 步，但第 1.2 步的预检
+就没人替你做了。

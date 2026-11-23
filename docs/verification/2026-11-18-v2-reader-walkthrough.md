@@ -79,6 +79,11 @@ unseen answers remain unexercised by a reader.
 ask them to answer "does this hold" and to file the printed sheet, and record their words and
 their confusion points. This document is the script for that session, not its result.
 
+The room is now one command to prepare: `python tools/walkthrough.py up` seeds a clean machine and
+`python tools/walkthrough.py check` replays these readings before anyone sits down
+(`docs/verification/2026-11-23-v2-walkthrough-pack.md`). That closes none of the above — the readers
+are still the missing input.
+
 ## 3. A regression the probe run exposed and the fix
 
 Running the full suite after re-seeding the walkthrough database found one failure that the

@@ -62,6 +62,14 @@ that was revoked answers 403 on the next request, and an expired or absent cooki
 `DELETE /api/v1/session` clears both cookies. No password is stored and no token is written into
 the cookie.
 
+Handing the portal to somebody who has never seen it — the two-reader walkthrough the M4 gate asks
+for — starts with `python tools/walkthrough.py up`: it builds the demo packet from the test fixtures
+themselves, migrates a throwaway database, ingests, and prints the serve command, the LAN address and
+one token per reader. `python tools/walkthrough.py check` then signs in as each reader over HTTP and
+asserts the ten readings the runbook promises, so a wrong database fails in an empty room. The
+operator's checklist is `docs/verification/v2-reader-gate-runbook.md`; what the tool proves and what
+it does not is `docs/verification/2026-11-23-v2-walkthrough-pack.md`.
+
 ## Exports
 
 `export build` writes the same bundle the HTTP endpoint writes, from the same code path: every line
