@@ -18,19 +18,38 @@ from . import emit
 from .manifest import Manifest
 
 STYLE = """
-:root{color-scheme:light}body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-margin:2rem auto;max-width:62rem;padding:0 1rem;color:#1f2328;background:#fff}
-h1{font-size:1.5rem}h2{font-size:1.1rem;margin-top:2rem}
-code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9rem}
-.card{border:1px solid #d0d7de;border-radius:6px;padding:1rem;margin:.75rem 0}
-.refusal{border-left:5px solid #b35900;background:#fff8f0;padding:.75rem 1rem;margin:.5rem 0}
-.refusal strong{color:#8a3b00}
-.unavailable{border-left:5px solid #6e7781;background:#f6f8fa;padding:.75rem 1rem}
-.triple{color:#57606a;font-size:.85rem;margin-top:.5rem}
-.meta{color:#57606a;font-size:.85rem}
-table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #d8dee4;padding:.4rem;text-align:left}
-@media print{@page{size:A4;margin:18mm}body{margin:0;max-width:none;font-size:11pt}
-.card,.refusal,.unavailable,table{break-inside:avoid}a{color:#000;text-decoration:none}}
+/* One paper-and-ink ramp, one accent, three text roles. Colour lives in the
+   verdict and the numbers, never in the chrome. */
+:root{color-scheme:light;
+--bg:#f7f8fa;--surface:#fff;--raised:#eef1f5;--line:rgba(17,24,39,.09);
+--text:#111827;--text-2:#4b5565;--text-3:#6b7487;
+--accent:#1e4a6d;--good:#16794a;--bad:#b42318;--warn:#8a5a00;
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+margin:32px auto;max-width:1120px;padding:0 32px;color:var(--text);background:var(--bg)}
+h1{font-size:20px;line-height:1.2;font-weight:500;margin:0 0 24px;letter-spacing:0}
+h2{font-size:15px;line-height:1.4;font-weight:500;margin:32px 0 12px;letter-spacing:0}
+p{margin:0 0 8px}
+code,pre{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+.card{border:1px solid var(--line);border-radius:12px;background:var(--surface);
+padding:20px;margin:12px 0}
+.card>:last-child{margin-bottom:0}
+.refusal{border-left:2px solid var(--warn);background:var(--raised);
+padding:16px 20px;margin:12px 0}
+.refusal strong{color:var(--bad);font-weight:500}
+.unavailable{border-left:2px solid var(--line);background:var(--raised);
+padding:16px 20px;margin:12px 0;color:var(--text-2)}
+.triple{color:var(--text-3);font-size:12px;margin-top:8px;font-family:var(--mono);
+font-variant-numeric:tabular-nums;word-break:break-word}
+.meta{color:var(--text-2);font-size:13px}
+table{border-collapse:collapse;width:100%;margin-top:12px}
+td,th{border-bottom:1px solid var(--line);padding:12px 8px;text-align:left;font-size:13px}
+th{color:var(--text-3);font-size:12px;font-weight:400}
+@media print{@page{size:A4;margin:18mm}
+body{margin:0;max-width:none;padding:0;font-size:11pt;background:#fff;color:#000}
+.card,.refusal,.unavailable,table{break-inside:avoid}
+a{color:#000;text-decoration:none}}
 """
 
 

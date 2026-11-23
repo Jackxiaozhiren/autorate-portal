@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="unslop-steps" content="Spacing, Color and icons, Type, Details">
+<meta name="unslop-frame" content="0 0 1440">
+<title>autorate portal — unslop</title>
+<style>
+  /* STEP 0 — the original screen, kept verbatim as the starting rules. */
+  :root { color-scheme: light; --line: #8884; --muted: #8888; }
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; max-width: 960px; background: #fff; color: #111; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .muted { color: var(--muted); }
+  [hidden] { display: none !important; }
+  .row { display: flex; gap: 8px; align-items: end; margin: 16px 0; flex-wrap: wrap; }
+  label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
+  input, select { padding: 6px 8px; min-width: 160px; font: inherit; }
+  input[type=text], input[type=password] { min-width: 260px; }
+  button { padding: 7px 12px; cursor: pointer; font: inherit; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #8881; }
+  .panel { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0; }
+  .card { border: 1px dashed var(--line); border-radius: 6px; padding: 8px; margin: 6px 0; font-size: 13px; }
+  .triple { font-size: 12px; color: #8888; margin: 4px 0 0; word-break: break-word; }
+  .reason { font-weight: 600; }
+  .absent, .unavailable { color: #b26a00; }
+  .banner { border-left: 4px solid #c0392b; padding: 6px 10px; background: #c0392b1a; }
+  .slices { display: grid; gap: 12px; }
+  .error { color: #c0392b; }
+  a.download { display: inline-block; padding: 7px 12px; border: 1px solid var(--line); border-radius: 3px; color: inherit; text-decoration: none; }
+  .boundary { border-top: 2px dashed #c0392b; padding: 6px 0; font-size: 13px; }
+  :focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
+  pre { overflow-x: auto; font-size: 12px; }
+  .state, .claim-number, .comparability p, .additional, .audit-label { font-size: 13px; }
+  .comparability { margin: 8px 0; }
+  .comparability blockquote { margin: 4px 0 0; padding-left: 8px; color: #888; font-size: 13px; }
+  .audit-label { margin: 4px 0; }
+  p { margin: 0 0 8px; }
+
+  /* Wrapper scaffolding so layout can morph without changing structure. */
+  .shell { max-width: 960px; margin: 0; padding: 0; }
+  .masthead { display: block; padding-bottom: 0; border-bottom: 0 solid transparent; }
+  .brandline { display: block; }
+  .block { margin-top: 0; }
+  .block > .muted { max-width: none; }
+
+  /* The typefaces load up front so the Type step can switch without a flash. */
+  @font-face { font-family: "IBM Plex Sans"; src: url("fonts/plex-sans-var.woff2") format("woff2"); font-weight: 400 500; font-display: swap; }
+  @font-face { font-family: "IBM Plex Mono"; src: url("fonts/plex-mono-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+  @font-face { font-family: "IBM Plex Mono"; src: url("fonts/plex-mono-500.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+
+  /* STEP 1 — Spacing: 4px grid, full-width shell, grouped sections. */
+  html.s1 .shell { max-width: 1440px; padding: 32px; }
+  html.s1 body { padding: 0; max-width: none; }
+  html.s1 .masthead { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+  html.s1 .brandline { gap: 4px; }
+  html.s1 .masthead .row { margin: 0; gap: 12px; }
+  html.s1 .row { gap: 12px; margin: 16px 0; }
+  html.s1 label { gap: 4px; }
+  html.s1 input, html.s1 select { padding: 8px 12px; height: 36px; }
+  html.s1 button { padding: 8px 16px; height: 36px; }
+  html.s1 .block { margin-top: 40px; }
+  html.s1 .block > .muted { max-width: 60ch; margin-bottom: 16px; }
+  html.s1 h1 { margin: 0; }
+  html.s1 h2 { margin: 0 0 12px; }
+  html.s1 .panel { padding: 20px; margin: 16px 0; }
+  html.s1 .card { padding: 16px; margin: 8px 0; }
+  html.s1 .triple { margin: 8px 0 0; }
+  html.s1 th, html.s1 td { padding: 12px 8px; }
+  html.s1 .slices { gap: 12px; }
+  html.s1 .audit-label { margin: 8px 0; }
+  html.s1 .comparability { margin: 12px 0; }
+  html.s1 .comparability blockquote { margin: 8px 0 0; padding-left: 16px; }
+
+  /* STEP 2 — Color and icons: one tinted neutral ramp, one accent, three text roles. */
+  html.s2 :root {
+    color-scheme: light;
+    --line: rgba(17, 24, 39, .09);
+    --muted: #4b5565;
+  }
+  html.s2 body { background: #f7f8fa; color: #111827; }
+  html.s2 h1, html.s2 h2 { color: #111827; }
+  html.s2 .muted { color: #4b5565; }
+  html.s2 input, html.s2 select, html.s2 button { color: #111827; background: #fff; border: 1px solid var(--line); }
+  html.s2 #signin { background: #111827; color: #fff; border-color: #111827; }
+  html.s2 .panel { background: #fff; border: 1px solid var(--line); }
+  html.s2 .panel[data-state] { border-left: 2px solid var(--line); }
+  html.s2 .panel[data-state="cannot_be_bounded"] { border-left-color: #8a5a00; }
+  html.s2 .card { background: #eef1f5; border: 1px solid var(--line); }
+  html.s2 .triple { color: #6b7487; }
+  html.s2 .state, html.s2 .claim-number, html.s2 .additional, html.s2 .audit-label,
+  html.s2 .comparability p, html.s2 .comparability blockquote { color: #4b5565; }
+  html.s2 .reason { color: #111827; font-weight: 400; }
+  html.s2 .absent, html.s2 .unavailable { color: #8a5a00; }
+  html.s2 th { color: #6b7487; font-size: 12px; font-weight: 400; }
+  html.s2 td { color: #111827; font-size: 13px; }
+  html.s2 .error { color: #b42318; }
+  html.s2 .boundary { border-top: 1px dashed var(--line); color: #4b5565; }
+  html.s2 .trend-row { color: #4b5565; border-bottom: 1px solid var(--line); }
+  html.s2 a.download { border: 1px solid var(--line); border-radius: 8px; color: #111827; }
+  html.s2 :focus-visible { outline-color: #2c5f8a; }
+  html.s2 .slice { background: #fff; border: 1px solid var(--line); }
+  html.s2 .banner { border-left: 2px solid #b42318; background: #eef1f5; color: #4b5565; }
+
+  /* STEP 3 — Type: one interface face, a mono partner for figures and meta. */
+  html.s3 body { font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
+  html.s3 h1 { font-size: 20px; font-weight: 500; letter-spacing: 0; }
+  html.s3 h2 { font-size: 15px; font-weight: 500; letter-spacing: 0; }
+  html.s3 code, html.s3 .triple, html.s3 .state, html.s3 .trend-row, html.s3 .audit-label,
+  html.s3 th:nth-child(n+5), html.s3 td:nth-child(n+5) { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  html.s3 .triple { font-size: 12px; }
+  html.s3 label { font-size: 12px; }
+  html.s3 .reason { font-size: 14px; }
+  html.s3 .comparability blockquote { font-size: 13px; }
+
+  /* STEP 4 — Details: nested radii, aligned number columns, quiet signature. */
+  html.s4 input, html.s4 select, html.s4 button, html.s4 a.download, html.s4 .card,
+  html.s4 .slice, html.s4 .banner { border-radius: 8px; }
+  html.s4 .panel { border-radius: 12px; }
+  html.s4 .state-badge { border-radius: 4px; font-family: "IBM Plex Mono", monospace; font-size: 12px; padding: 2px 8px; background: #eef1f5; color: #4b5565; }
+  html.s4 th:nth-child(n+5), html.s4 td:nth-child(n+5) { text-align: right; }
+  html.s4 .panel > :last-child, html.s4 .card > :last-child, html.s4 .slice > :last-child { margin-bottom: 0; }
+  html.s4 .comparability blockquote { border-left: 2px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="shell">
+<header class="masthead" data-gap="main">
+  <div class="brandline">
+    <h1>autorate portal</h1>
+    <p class="muted" id="version"><span class="swap" data-at="3"><span class="from">certificates, as the artefacts state them</span><span class="to">portal 0.1.0 · pinned autorate 0.1.2</span></span></p>
+  </div>
+  <div class="row">
+    <label><span>language</span><select><option>English</option></select></label>
+    <button id="signin" data-radius>Sign in</button>
+    <button>Refresh</button>
+    <button>Sign out</button>
+    <button>Clear</button>
+  </div>
+</header>
+<p class="muted">signed in as ada@example.test · project prj-laya</p>
+
+<section class="block" data-gap="main">
+  <h2 data-gap="main">Check a claim</h2>
+  <p class="muted" data-gap="main">A claim is checked against this project's certificates. Three answers are possible, and cannot be bounded is a result, not a failure.</p>
+  <div class="row" data-gap="main">
+    <label><span>share</span><input value="0.66"></label>
+    <label><span>field</span><input value="confidence"></label>
+    <label><span>unit</span><input value="case"></label>
+    <label><span>population</span><input value="resolutions"></label>
+    <button id="check" data-radius>Check a claim</button>
+  </div>
+  <section id="verdict" data-gap="main">
+    <section class="panel verdict" data-state="cannot_be_bounded" data-radius>
+      <h2>verdict: cannot_be_bounded</h2>
+      <p class="reason">the packet never measured the field 'confidence'; same-named fields are not the same quantity</p>
+      <div class="comparability"><p>comparability statement (quoted verbatim)</p><blockquote>A field name therefore does not say which quantity a file holds; only the program that wrote it does</blockquote></div>
+      <p class="audit-label">the audit lane is quoted, not parsed into a bound</p>
+      <p class="triple" data-slop="Low-contrast meta">denominator: n_cal=96 n_eval=96; budget/rubric: alpha=0.05 beta=0.05 delta=0.05 method=aps seed=7; packet: pkt-4223b2442f04f1b6 / a606d1a0fd40; bound_unit: case</p>
+    </section>
+  </section>
+</section>
+
+<section class="block" data-gap="main">
+  <h2>Certificates</h2>
+  <table id="certificates">
+    <thead><tr><th>task</th><th>backend</th><th>state</th><th>reason</th><th>n_cal</th><th>n_eval</th></tr></thead>
+    <tbody>
+      <tr><td>jev</td><td>cert_jev</td><td>not statistically feasible</td><td>empty_feasible_set</td><td>96</td><td>96</td></tr>
+      <tr><td>laya</td><td>cert_laya</td><td>not statistically feasible</td><td>empty_feasible_set</td><td>96</td><td>96</td></tr>
+      <tr><td>massive_de_laya</td><td>cert_massive_de_laya</td><td>not statistically feasible</td><td>empty_feasible_set</td><td>96</td><td>96</td></tr>
+      <tr><td>massive_en_laya</td><td>cert_massive_en_laya</td><td>not statistically feasible</td><td>empty_feasible_set</td><td>96</td><td>96</td></tr>
+      <tr><td>severity_ordinal</td><td>cert_severity_ordinal</td><td>not statistically feasible</td><td>empty_feasible_set</td><td>96</td><td>96</td></tr>
+    </tbody>
+  </table>
+  <section id="detail">
+    <div class="slices">
+      <section class="panel" data-state="refusal"><h2>jev / cert_jev</h2><p class="state">empty_feasible_set</p><p class="reason">empty_feasible_set</p></section>
+      <p class="absent" data-slop="Off-palette color">no_slice_evidence</p>
+      <p class="note">independence not established</p>
+    </div>
+  </section>
+</section>
+
+<section class="block">
+  <div class="row">
+    <button>shareable badge</button><button>trend</button>
+    <label><span>export</span><select><option>annex_iv</option></select></label>
+    <button>export</button>
+  </div>
+  <section id="tools">
+    <section class="panel trend">
+      <h2>trend</h2><p class="reason">series within one protocol_digest a606d1a0fd40</p>
+      <div class="trend-row"><code>pkt-6cf916c648f3d088</code> jev / cert_jev · not published by this certificate · 96</div>
+      <div class="trend-row"><code>pkt-6cf916c648f3d088</code> laya / cert_laya · not published by this certificate · 96</div>
+    </section>
+  </section>
+</section>
+</div>
+</body>
+</html>

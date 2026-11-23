@@ -5,37 +5,204 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>autorate portal</title>
 <style>
-  :root { color-scheme: light dark; --line: #8884; --muted: #8888; }
-  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; max-width: 960px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 16px; margin: 0 0 8px; }
-  .muted { color: var(--muted); }
+  /* IBM Plex Sans for the interface, IBM Plex Mono for figures and provenance —
+     a measured, engineering face that fits an audit desk. Local files keep the
+     portal working offline; the system stack remains as a fallback. */
+  @font-face {
+    font-family: "IBM Plex Sans";
+    src: url("fonts/plex-sans-var.woff2") format("woff2");
+    font-style: normal; font-weight: 400 500; font-display: swap;
+  }
+  @font-face {
+    font-family: "IBM Plex Mono";
+    src: url("fonts/plex-mono-400.woff2") format("woff2");
+    font-style: normal; font-weight: 400; font-display: swap;
+  }
+  @font-face {
+    font-family: "IBM Plex Mono";
+    src: url("fonts/plex-mono-500.woff2") format("woff2");
+    font-style: normal; font-weight: 500; font-display: swap;
+  }
+  /* One neutral ramp, one accent, three text roles. The tint is paper-and-ink,
+     from the audit-desk world; colour is carried by the evidence, not the chrome. */
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --raised: #eef1f5;
+    --line: rgba(17, 24, 39, .09);
+    --text: #111827;
+    --text-2: #4b5565;
+    --text-3: #6b7487;
+    --accent: #2c5f8a;
+    --accent-ink: #1e4a6d;
+    --on-accent: #ffffff;
+    --good: #16794a;
+    --bad: #b42318;
+    --warn: #8a5a00;
+    --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --control: 8px;
+    --card: 12px;
+    --ease: cubic-bezier(.22, 1, .36, 1);
+    color: var(--text);
+    background: var(--bg);
+  }
+  /* Dark follows the same ramp. Depth comes from surface steps and hairlines,
+     never from shadows or a coloured wash. */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #141415;
+      --surface: #19191b;
+      --raised: #232325;
+      --line: rgba(237, 237, 237, .09);
+      --text: #ededed;
+      --text-2: #a1a1a6;
+      --text-3: #85858b;
+      --accent: #9dc4e8;
+      --accent-ink: #9dc4e8;
+      --on-accent: #111827;
+      --good: #4cc38a;
+      --bad: #e5484d;
+      --warn: #d9a441;
+    }
+  }
   /* A hidden control must be hidden even when it carries a display rule of its
      own: `label` is flex, and an author rule outranks the [hidden] UA default. */
   [hidden] { display: none !important; }
-  .row { display: flex; gap: 8px; align-items: end; margin: 16px 0; flex-wrap: wrap; }
-  label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
-  input, select { padding: 6px 8px; min-width: 160px; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 var(--sans);
+  }
+  .shell { max-width: 1440px; margin: 0 auto; padding: 32px; }
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--line);
+  }
+  .brandline { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  h1 { font-size: 20px; line-height: 1.2; font-weight: 500; margin: 0; letter-spacing: 0; }
+  h2 {
+    font-size: 15px; line-height: 1.4; font-weight: 500; margin: 0 0 12px;
+    letter-spacing: 0; color: var(--text);
+  }
+  p { margin: 0 0 8px; }
+  .muted { color: var(--text-2); }
+  .row { display: flex; gap: 12px; align-items: flex-end; margin: 16px 0; flex-wrap: wrap; }
+  .masthead .row { margin: 0; }
+  label { display: flex; flex-direction: column; font-size: 12px; color: var(--text-2); gap: 4px; }
+  input, select {
+    font: inherit; font-size: 14px; color: var(--text);
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--control); padding: 8px 12px; min-width: 160px; height: 36px;
+    transition: border-color 140ms var(--ease), background-color 140ms var(--ease);
+  }
   input[type=text], input[type=password] { min-width: 260px; }
-  button { padding: 7px 12px; cursor: pointer; }
-  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
-  tbody tr { cursor: pointer; }
-  tbody tr:hover { background: #8881; }
-  .panel { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0; }
-  .card { border: 1px dashed var(--line); border-radius: 6px; padding: 8px; margin: 6px 0; }
-  .triple { font-size: 12px; color: #8888; margin: 4px 0 0; word-break: break-word; }
-  .reason { font-weight: 600; }
-  .absent, .unavailable { color: #b26a00; }
-  .banner { border-left: 4px solid #c0392b; padding: 6px 10px; background: #c0392b1a; }
+  input:hover, select:hover { background: var(--raised); }
+  button {
+    font: inherit; font-size: 14px; color: var(--text);
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--control); padding: 8px 16px; height: 36px; cursor: pointer;
+    transition: background-color 140ms var(--ease), border-color 140ms var(--ease), color 140ms var(--ease);
+  }
+  button:hover { background: var(--raised); }
+  button:active { transform: scale(.98); }
+  #signin { background: var(--text); color: var(--bg); border-color: var(--text); }
+  #signin:hover { background: var(--accent-ink); border-color: var(--accent-ink); color: var(--on-accent); }
+  .block { margin-top: 40px; }
+  .block > .muted { max-width: 60ch; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    text-align: left; padding: 12px 8px;
+    border-bottom: 1px solid var(--line); font-size: 13px;
+  }
+  th { color: var(--text-3); font-size: 12px; font-weight: 400; }
+  th:first-child, td:first-child { padding-left: 0; }
+  th:last-child, td:last-child { padding-right: 0; }
+  th:nth-child(n+5), td:nth-child(n+5) {
+    text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums;
+  }
+  tbody tr { cursor: pointer; transition: background-color 140ms var(--ease); }
+  tbody tr:hover, tbody tr:focus-visible { background: var(--raised); }
+  .panel {
+    border: 1px solid var(--line); border-radius: var(--card);
+    background: var(--surface); padding: 20px; margin: 16px 0;
+  }
+  .panel > :last-child { margin-bottom: 0; }
+  .panel h2 { font-size: 14px; }
+  /* The verdict is one of the two moments: a calm surface step, a semantic
+     hairline that states the result, and text that carries the meaning. */
+  .panel[data-state] { border-left: 2px solid var(--line); }
+  .panel[data-state="certified"], .panel[data-state="bounded_supports"],
+  .panel[data-state="bounded_refutes"] { border-left-color: var(--good); }
+  .panel[data-state="refusal"], .panel[data-state="bounded_refutes"] { border-left-color: var(--bad); }
+  .panel[data-state="unavailable"], .panel[data-state="cannot_be_bounded"] { border-left-color: var(--warn); }
+  .state { color: var(--text-2); font-family: var(--mono); font-size: 12px; }
+  .reason { color: var(--text); font-size: 14px; font-weight: 400; }
+  /* Signature: the four-part provenance line under every published number. */
+  .triple {
+    font-family: var(--mono); font-size: 12px; color: var(--text-3);
+    margin: 8px 0 0; word-break: break-word; font-variant-numeric: tabular-nums;
+  }
+  code { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .card {
+    border: 1px solid var(--line); border-radius: var(--control);
+    background: var(--raised); padding: 16px; margin: 8px 0;
+  }
+  .card > :last-child { margin-bottom: 0; }
+  .absent, .unavailable { color: var(--warn); }
+  .banner {
+    border-left: 2px solid var(--bad); padding: 12px 16px;
+    background: var(--raised); border-radius: var(--control); color: var(--text-2);
+  }
   .slices { display: grid; gap: 12px; }
-  .error { color: #c0392b; }
-  a.download { display: inline-block; padding: 7px 12px; border: 1px solid var(--line);
-    border-radius: 3px; color: inherit; text-decoration: none; }
-  a.download:hover { background: #8881; }
-  .boundary { border-top: 2px dashed #c0392b; padding: 6px 0; font-size: 13px; }
-  :focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
-  pre { overflow-x: auto; font-size: 12px; }
+  .slice {
+    border: 1px solid var(--line); border-radius: var(--control);
+    padding: 12px 16px; background: var(--surface);
+  }
+  .slice > :last-child { margin-bottom: 0; }
+  .state-badge {
+    display: inline-block; font-family: var(--mono); font-size: 12px;
+    padding: 2px 8px; border-radius: 4px; background: var(--raised); color: var(--text-2);
+  }
+  .state-badge[data-state="certified"] { color: var(--good); }
+  .state-badge[data-state="not-certifiable"], .state-badge[data-state="drift"] { color: var(--bad); }
+  .claim-number, .comparability p, .additional, .audit-label, .provenance,
+  .shared, .correction, .disclosure, .note {
+    font-size: 13px; color: var(--text-2);
+  }
+  .comparability { margin: 12px 0; }
+  .comparability blockquote {
+    margin: 8px 0 0; padding-left: 16px;
+    border-left: 2px solid var(--line); color: var(--text-2); font-size: 13px;
+  }
+  .audit-label { margin: 8px 0; }
+  .error { color: var(--bad); }
+  a.download {
+    display: inline-block; padding: 8px 16px; border: 1px solid var(--line);
+    border-radius: var(--control); color: var(--text); text-decoration: none;
+    transition: background-color 140ms var(--ease), border-color 140ms var(--ease);
+  }
+  a.download:hover { background: var(--raised); }
+  .boundary { border-top: 1px dashed var(--line); padding: 12px 0 0; font-size: 12px; color: var(--text-2); }
+  .trend-row {
+    padding: 8px 0; border-bottom: 1px solid var(--line);
+    font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums;
+  }
+  .trend-row:last-child { border-bottom: 0; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  pre { overflow-x: auto; font-size: 12px; font-family: var(--mono); }
+  @media (max-width: 720px) {
+    .shell { padding: 16px; }
+    .masthead { flex-direction: column; align-items: stretch; gap: 16px; }
+    .row { align-items: stretch; }
+    .row > label, .row > button, .row > a.download { flex: 1 1 100%; }
+    input, select, input[type=text], input[type=password] { width: 100%; min-width: 0; }
+  }
   @media print {
     @page { size: A4; margin: 18mm; }
     /* Paper is white and the screen preference is not the paper's. Without
@@ -43,75 +210,88 @@
        sheet looks blank and the verdict is lost. */
     :root { color-scheme: light; }
     html, body { background: #fff; color: #000; }
-    body { max-width: none; margin: 0; padding: 0; font-size: 11pt; }
+    .shell { max-width: none; margin: 0; padding: 0; font-size: 11pt; }
+    .masthead { border-bottom: 1px solid #000; padding-bottom: 8px; }
     .row, button, select, input, #error, a.download { display: none; }
-    .panel, .card, table { break-inside: avoid; }
+    #signedin, #note { display: none; }
+    .panel, .card, table, .slice { break-inside: avoid; }
     .banner { border-left-color: #000; }
-    .muted, .triple { color: #444; }
+    .muted, .triple, .audit-label, .additional { color: #444; }
     tbody tr:hover { background: transparent; }
   }
 </style>
 </head>
 <body>
-<h1 data-i18n="app.title">autorate portal</h1>
-<p class="muted" id="version">certificates, as the artefacts state them</p>
-
-<div class="row">
-  <label><span data-i18n="label.locale">language</span>
-    <select id="locale" aria-label="language">
-      <option value="en">English</option>
-      <option value="zh-Hans">简体中文</option>
-    </select>
-  </label>
-  <label id="token-label"><span data-i18n="label.token">API token</span>
-    <input id="token" type="password" autocomplete="off" placeholder="project-scoped token">
-  </label>
-  <button id="signin" data-i18n="label.signin">Sign in</button>
-  <button id="refresh" data-i18n="label.refresh">Refresh</button>
-  <button id="signout" data-i18n="label.signout">Sign out</button>
-  <button id="clear" data-i18n="label.clear">Clear</button>
-</div>
+<main class="shell">
+<header class="masthead">
+  <div class="brandline">
+    <h1 data-i18n="app.title">autorate portal</h1>
+    <p class="muted" id="version">certificates, as the artefacts state them</p>
+  </div>
+  <div class="row">
+    <label><span data-i18n="label.locale">language</span>
+      <select id="locale" aria-label="language">
+        <option value="en">English</option>
+        <option value="zh-Hans">简体中文</option>
+      </select>
+    </label>
+    <label id="token-label"><span data-i18n="label.token">API token</span>
+      <input id="token" type="password" autocomplete="off" placeholder="project-scoped token">
+    </label>
+    <button id="signin" data-i18n="label.signin">Sign in</button>
+    <button id="refresh" data-i18n="label.refresh">Refresh</button>
+    <button id="signout" data-i18n="label.signout">Sign out</button>
+    <button id="clear" data-i18n="label.clear">Clear</button>
+  </div>
+</header>
 <p class="muted" id="signedin" hidden></p>
 <p class="muted" id="note" hidden></p>
 <p class="error" id="error" role="alert"></p>
 
-<h2 data-i18n="label.check_claim">Check a claim</h2>
-<p class="muted" data-i18n="text.claim_intro">A claim is checked against this project's certificates. Three answers are possible, and "cannot be bounded" is a result, not a failure.</p>
-<div class="row">
-  <label><span data-i18n="label.share">share</span><input id="claim-share" value="0.66"></label>
-  <label><span data-i18n="label.field">field</span><input id="claim-field" value="confidence"></label>
-  <label><span data-i18n="label.unit">unit</span><input id="claim-unit" value="case"></label>
-  <label><span data-i18n="label.population">population</span><input id="claim-population" value="resolutions"></label>
-  <button id="check" data-i18n="label.check_claim">Check a claim</button>
-</div>
-<section id="verdict" aria-live="polite"></section>
+<section class="block">
+  <h2 data-i18n="label.check_claim">Check a claim</h2>
+  <p class="muted" data-i18n="text.claim_intro">A claim is checked against this project's certificates. Three answers are possible, and "cannot be bounded" is a result, not a failure.</p>
+  <div class="row">
+    <label><span data-i18n="label.share">share</span><input id="claim-share" value="0.66"></label>
+    <label><span data-i18n="label.field">field</span><input id="claim-field" value="confidence"></label>
+    <label><span data-i18n="label.unit">unit</span><input id="claim-unit" value="case"></label>
+    <label><span data-i18n="label.population">population</span><input id="claim-population" value="resolutions"></label>
+    <button id="check" data-i18n="label.check_claim">Check a claim</button>
+  </div>
+  <section id="verdict" aria-live="polite"></section>
+</section>
 
-<h2 data-i18n="label.certificates">Certificates</h2>
-<table id="certificates" hidden>
-  <thead>
-    <tr>
-      <th data-i18n="label.task">task</th><th data-i18n="label.backend">backend</th>
-      <th data-i18n="label.state">state</th><th data-i18n="label.reason">reason</th>
-      <th data-i18n="label.n_cal">n_cal</th><th data-i18n="label.n_eval">n_eval</th>
-    </tr>
-  </thead>
-  <tbody></tbody>
-</table>
-<section id="detail" aria-live="polite"></section>
+<section class="block">
+  <h2 data-i18n="label.certificates">Certificates</h2>
+  <table id="certificates" hidden>
+    <thead>
+      <tr>
+        <th data-i18n="label.task">task</th><th data-i18n="label.backend">backend</th>
+        <th data-i18n="label.state">state</th><th data-i18n="label.reason">reason</th>
+        <th data-i18n="label.n_cal">n_cal</th><th data-i18n="label.n_eval">n_eval</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <section id="detail" aria-live="polite"></section>
+</section>
 
-<div class="row">
-  <button id="badge" data-i18n="label.badge">shareable badge</button>
-  <button id="trend" data-i18n="label.trend">trend</button>
-  <label><span data-i18n="label.export">export</span>
-    <select id="export-kind">
-      <option value="annex_iv">annex_iv</option>
-      <option value="iso_42001">iso_42001</option>
-      <option value="aap">aap</option>
-    </select>
-  </label>
-  <button id="export" data-i18n="label.export">export</button>
-</div>
-<section id="tools" aria-live="polite"></section>
+<section class="block">
+  <div class="row">
+    <button id="badge" data-i18n="label.badge">shareable badge</button>
+    <button id="trend" data-i18n="label.trend">trend</button>
+    <label><span data-i18n="label.export">export</span>
+      <select id="export-kind">
+        <option value="annex_iv">annex_iv</option>
+        <option value="iso_42001">iso_42001</option>
+        <option value="aap">aap</option>
+      </select>
+    </label>
+    <button id="export" data-i18n="label.export">export</button>
+  </div>
+  <section id="tools" aria-live="polite"></section>
+</section>
+</main>
 
 <script>
 // The server escapes every value it renders (emit.e); this page never builds
